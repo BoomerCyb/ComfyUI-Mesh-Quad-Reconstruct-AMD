@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import importlib
+import importlib.util
 import os
 from pathlib import Path
-import platform
-import re
+import shutil
 import subprocess
 import sys
 
@@ -13,123 +12,128 @@ import sys
 NODE_DIR = Path(__file__).resolve().parent
 
 
-def _run(command):
-    print("[Mesh Quad Installer]", " ".join(map(str, command)), flush=True)
-    subprocess.check_call([str(item) for item in command])
+def _run(command, env=None):
+    command = [str(item) for item in command]
+    if env is not None:
+        executable = shutil.which(command[0], path=env.get("PATH"))
+        if executable:
+            command[0] = executable
+    print("[Installer]", subprocess.list2cmdline(command), flush=True)
+    subprocess.check_call(command, cwd=NODE_DIR, env=env)
 
 
-def _pip_install(*arguments):
-    _run([sys.executable, "-m", "pip", "install", *arguments])
+def _gpu_build_architectures(env, torch):
+    # Respect an explicit target supplied by the user or their launcher.
+    if env.get("PYTORCH_ROCM_ARCH", "").strip():
+        print("[Installer] GPU architectures (override):", env["PYTORCH_ROCM_ARCH"])
+        return
+    devices = []
+    for index in range(torch.cuda.device_count()):
+        props = torch.cuda.get_device_properties(index)
+        arch = getattr(props, "gcnArchName", "").split(":", 1)[0]
+        if not arch:
+            raise RuntimeError("Cannot determine the HIP architecture for " + props.name +
+                               ". Set PYTORCH_ROCM_ARCH explicitly.")
+        integrated = getattr(props, "is_integrated", getattr(props, "integrated", None))
+        devices.append((props.name, arch, integrated))
+    if not devices:
+        raise RuntimeError("No visible ROCm GPU is available for compilation.")
+    # Older PyTorch builds may lack the HIP integrated-device property.
+    # Keep unclassified devices rather than guessing from names or VRAM.
+    selected = [device for device in devices if device[2] != 1]
+    if not selected:
+        selected = devices
+        print("[Installer] Only integrated GPUs are visible; targeting those GPUs.")
+    for name, arch, integrated in devices:
+        if integrated is None:
+            print("[Installer] GPU type unavailable; retaining:", name, arch)
+        elif (name, arch, integrated) not in selected:
+            print("[Installer] Excluding integrated GPU:", name, arch)
+    env["PYTORCH_ROCM_ARCH"] = ";".join(dict.fromkeys(device[1] for device in selected))
+    print("[Installer] GPU build architectures:", env["PYTORCH_ROCM_ARCH"])
 
 
-def _has_visualbruno_backend():
-    try:
-        module = importlib.import_module("cumesh")
-        return callable(
-            getattr(module.remeshing, "reconstruct_mesh_dc_quad", None)
-        )
-    except Exception:
-        return False
+def _native_environment():
+    if os.name != "nt":
+        raise RuntimeError("This native build currently supports Windows x64.")
+    env = {key.upper(): value for key, value in os.environ.items()}
+    sdk = env.get("ROCM_HOME") or env.get("HIP_PATH") or env.get("ROCM_PATH")
+    if not sdk:
+        for name in ("_rocm_sdk_core", "_rocm_sdk_devel"):
+            spec = importlib.util.find_spec(name)
+            if spec and spec.origin:
+                candidate = Path(spec.origin).parent
+                if (candidate / "lib/llvm/bin/clang-cl.exe").is_file():
+                    sdk = str(candidate)
+                    break
+    if not sdk or not (Path(sdk) / "lib/llvm/bin/clang-cl.exe").is_file():
+        raise RuntimeError("Set ROCM_HOME to the matching Windows HIP SDK directory.")
+
+    vswhere = Path(env.get("PROGRAMFILES(X86)", "C:/Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
+    if not vswhere.is_file():
+        raise RuntimeError("Install Visual Studio C++ Build Tools and the Windows SDK.")
+    installation = subprocess.check_output([
+        str(vswhere), "-latest", "-products", "*", "-requires",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath",
+    ], text=True).strip()
+    if not installation:
+        raise RuntimeError("Visual Studio x64 C++ Build Tools were not found.")
+    vs = Path(installation)
+    script = NODE_DIR / ".build" / "developer-environment.cmd"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text('@echo off\ncall "' + str(vs / "Common7/Tools/VsDevCmd.bat") + '" -no_logo -arch=x64 -host_arch=x64 >nul\nif errorlevel 1 exit /b 1\nset\n', encoding="utf-8")
+    vcpkg_settings = {key: env[key] for key in ("VCPKG_ROOT", "VCPKG_INSTALLED_DIR") if key in env}
+    output = subprocess.check_output(["cmd.exe", "/d", "/c", str(script)], text=True, env=env)
+    for line in output.splitlines():
+        if "=" in line and not line.startswith("="):
+            key, value = line.split("=", 1)
+            env[key.upper()] = value
+    env.update(vcpkg_settings)
+    cmake_tools = vs / "Common7/IDE/CommonExtensions/Microsoft/CMake"
+    env["PATH"] = os.pathsep.join([
+        str(cmake_tools / "Ninja"), str(cmake_tools / "CMake/bin"),
+        str(Path(sys.executable).parent / "Scripts"), str(Path(sdk) / "bin"), env.get("PATH", ""),
+    ])
+    env["ROCM_HOME"] = sdk
+    env["HIP_PATH"] = sdk
+    env["CXX"] = str(Path(sdk) / "lib/llvm/bin/clang-cl.exe")
+    env["DISTUTILS_USE_SDK"] = "1"
+    env["MSSDK"] = "1"
+    env.setdefault("MAX_JOBS", "2")
+    for tool in ("cl.exe", "ninja.exe", "cmake.exe"):
+        if not shutil.which(tool, path=env["PATH"]):
+            raise RuntimeError("Required build tool is missing: " + tool)
+    return env
 
 
-def _torch_folder_name():
-    import torch
-
-    match = re.match(r"^(\d+)\.(\d+)", torch.__version__)
-    if not match:
-        return None
-    major, minor = match.groups()
-    return f"Torch{major}{minor}0"
-
-
-def _matching_sibling_wheel():
-    """Find the exact wheel already shipped by a sibling ComfyUI-Trellis2."""
-    custom_nodes_dir = NODE_DIR.parent
-    python_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    torch_folder = _torch_folder_name()
-    system = platform.system().lower()
-    platform_token = "win_amd64" if system == "windows" else "linux"
-
-    candidates = []
-    for sibling in custom_nodes_dir.iterdir():
-        if not sibling.is_dir() or "trellis2" not in sibling.name.lower():
-            continue
-        wheels_dir = sibling / "wheels"
-        if not wheels_dir.is_dir():
-            continue
-        for wheel in wheels_dir.rglob("cumesh-*.whl"):
-            path_text = str(wheel)
-            if python_tag not in wheel.name:
-                continue
-            if platform_token not in wheel.name.lower():
-                continue
-            if torch_folder and torch_folder.lower() not in path_text.lower():
-                continue
-            candidates.append(wheel)
-    return sorted(candidates)[-1] if candidates else None
-
-
-def _build_visualbruno_cumesh():
-    source_dir = NODE_DIR / "_build" / "visualbruno-CuMesh"
-    source_dir.parent.mkdir(parents=True, exist_ok=True)
-    if not source_dir.exists():
-        _run(
-            [
-                "git",
-                "clone",
-                "--recursive",
-                "https://github.com/visualbruno/CuMesh.git",
-                source_dir,
-            ]
-        )
-    _pip_install(str(source_dir), "--no-build-isolation", "--no-cache-dir")
+def _install(env):
+    _run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], env)
+    _run([sys.executable, "CuMesh-HIP/build_hip.py"], env)
+    _run([sys.executable, "-m", "pip", "install", "./CuMesh-HIP", "--no-build-isolation", "--no-deps"], env)
+    _run([sys.executable, "-c", "import cumesh._C, cumesh._cubvh, cumesh._xatlas; print('CuMesh native modules loaded')"], env)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--build-if-needed",
-        action="store_true",
-        help="Build VisualBruno/CuMesh if no installed backend or sibling wheel exists.",
-    )
+    parser.add_argument("--check", action="store_true", help="Check prerequisites without compiling or installing.")
+    parser.add_argument("--build-if-needed", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
-
-    _pip_install("-r", str(NODE_DIR / "requirements.txt"))
-
-    if _has_visualbruno_backend():
-        print("[Mesh Quad Installer] VisualBruno CuMesh backend is already ready.")
+    import torch
+    if not torch.version.hip:
+        raise RuntimeError("Use the ROCm PyTorch environment that runs ComfyUI.")
+    if not torch.cuda.is_available():
+        raise RuntimeError("The ROCm GPU is unavailable in this PyTorch environment.")
+    print("[Installer] Python:", sys.executable)
+    print("[Installer] PyTorch:", torch.__version__, "HIP:", torch.version.hip)
+    env = _native_environment()
+    _gpu_build_architectures(env, torch)
+    if args.check:
+        print("[Installer] Prerequisites checked; no modules were compiled or installed.")
         return 0
-
-    wheel = _matching_sibling_wheel()
-    if wheel is not None:
-        print(f"[Mesh Quad Installer] Installing matching sibling wheel: {wheel}")
-        _pip_install(str(wheel), "--force-reinstall", "--no-deps")
-        importlib.invalidate_caches()
-        if _has_visualbruno_backend():
-            print("[Mesh Quad Installer] CuMesh backend installed successfully.")
-            return 0
-
-    if args.build_if_needed:
-        print(
-            "[Mesh Quad Installer] No matching wheel found; building VisualBruno/CuMesh.\n"
-            "This requires Visual Studio C++ Build Tools and a CUDA Toolkit compatible "
-            "with ComfyUI's PyTorch."
-        )
-        _build_visualbruno_cumesh()
-        importlib.invalidate_caches()
-        if _has_visualbruno_backend():
-            print("[Mesh Quad Installer] CuMesh backend built successfully.")
-            return 0
-
-    print(
-        "\n[Mesh Quad Installer] The Python node is installed, but the required "
-        "VisualBruno CuMesh backend was not found.\n"
-        "Either keep ComfyUI-Trellis2 installed so its matching wheel is available, "
-        "or run Install-Windows.cmd to build the backend."
-    )
+    _install(env)
+    print("[Installer] Installation completed. Restart ComfyUI.")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

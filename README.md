@@ -1,3 +1,24 @@
+# ComfyUI-Mesh-Quad-Reconstruct-AMD
+
+## AMD / ROCm
+
+This fork keeps the original node interface and adds native HIP support.
+Use the ROCm PyTorch installation that runs ComfyUI and a matching HIP SDK.
+The source does not select a card model or impose a gfx1201 target. Native
+extensions target visible discrete AMD GPUs by default, excluding integrated GPUs
+when a discrete GPU is available. Set PYTORCH_ROCM_ARCH to override the targets.
+Integrated-only systems remain supported; PyTorch supplies the compiler flags.
+An installed binary still needs to match its GPU target, Python and Torch runtime.
+Hardware support depends on ROCm/PyTorch; validation here covers RX 9070 XT.
+
+Run `install_requirements.bat` with ComfyUI closed to build/install the native components.
+For prerequisites and manual commands, see [COMFYUI_ROCM_BUILD_GUIDE.md](COMFYUI_ROCM_BUILD_GUIDE.md).
+
+ComfyUI ROCm setup: [patientx-cfz/comfyui-rocm](https://github.com/patientx-cfz/comfyui-rocm).
+
+The original documentation follows. For AMD installation, use the instructions
+above and the ROCm build guide in place of the original CUDA installation steps.
+
 # ComfyUI Mesh Quad Reconstruction
 
 Standalone adaptation of VisualBruno's **Trellis2 - Reconstruct Mesh With Quad**

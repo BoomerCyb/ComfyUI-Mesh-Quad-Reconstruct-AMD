@@ -14,7 +14,7 @@ CUDA_FILTER_CHUNK_FACES = 1_048_576
 def _require_cuda() -> None:
     """Guard only: the CUDA backend is mandatory. No memory cleaning here."""
     if not torch.cuda.is_available():
-        raise RuntimeError("Quad Reconstruction requires an NVIDIA CUDA GPU.")
+        raise RuntimeError("Quad Reconstruction requires an available HIP/ROCm or CUDA GPU.")
 
 
 def _mesh_batch_items(mesh):
@@ -192,7 +192,7 @@ def _remove_floaters_cuda(cumesh_module, vertices, faces):
         raise RuntimeError("The installed CuMesh build does not expose cumesh.CuMesh.")
     original_face_count = int(faces.shape[0])
     print(
-        f"[Mesh Quad] Removing floaters on CUDA from {original_face_count:,} faces...",
+        f"[Mesh Quad] Removing floaters on GPU from {original_face_count:,} faces...",
         flush=True,
     )
     cuda_mesh = cumesh_module.CuMesh()
@@ -215,13 +215,13 @@ def _remove_floaters_cuda(cumesh_module, vertices, faces):
         del component_ids
         if removed_components == 0:
             print(
-                f"[Mesh Quad] CUDA floater filter: {int(num_components):,} component(s), "
+                f"[Mesh Quad] GPU floater filter: {int(num_components):,} component(s), "
                 "nothing below the 0.5% threshold.",
                 flush=True,
             )
             return vertices, faces
         print(
-            f"[Mesh Quad] CUDA floater filter: {int(num_components):,} components; "
+            f"[Mesh Quad] GPU floater filter: {int(num_components):,} components; "
             f"largest={largest_faces:,} faces; removing {removed_components:,} small "
             f"component(s) and {original_face_count - kept_faces:,} incident faces...",
             flush=True,
@@ -232,7 +232,7 @@ def _remove_floaters_cuda(cumesh_module, vertices, faces):
         del keep_mask
         filtered_vertices, filtered_faces = cuda_mesh.read()
         print(
-            f"[Mesh Quad] After CUDA floater removal: {len(filtered_faces):,} faces.",
+            f"[Mesh Quad] After GPU floater removal: {len(filtered_faces):,} faces.",
             flush=True,
         )
         return filtered_vertices, filtered_faces
@@ -281,15 +281,15 @@ def _load_cumesh():
         import cumesh
     except (ImportError, ModuleNotFoundError) as exc:
         raise RuntimeError(
-            "The VisualBruno CuMesh CUDA backend is missing. Run Install-Windows.cmd, "
-            "or install the matching cumesh wheel from ComfyUI-Trellis2/wheels."
+            "The CuMesh HIP backend is missing. Run install_requirements.bat "
+            "using the Python environment that runs ComfyUI."
         ) from exc
     reconstruct = getattr(cumesh.remeshing, "reconstruct_mesh_dc_quad", None)
     if reconstruct is None:
         raise RuntimeError(
             "The installed CuMesh is not VisualBruno's build: "
             "cumesh.remeshing.reconstruct_mesh_dc_quad is missing. "
-            "Install https://github.com/visualbruno/CuMesh or its matching wheel."
+            "Run install_requirements.bat to build the bundled CuMesh HIP backend."
         )
     return cumesh, reconstruct
 
