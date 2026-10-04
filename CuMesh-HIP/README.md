@@ -1,6 +1,6 @@
 ## HIP build
 
-Build with ROCm PyTorch using build_hip.py. See ../COMFYUI_ROCM_BUILD_GUIDE.md.
+Build with ROCm PyTorch using build_hip.py. See ../docs/AMD_BUILD.md.
 
 # CuMesh: High-Performance Geometry Processing for PyTorch
 

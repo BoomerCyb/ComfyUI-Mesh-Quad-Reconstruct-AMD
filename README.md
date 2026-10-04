@@ -14,7 +14,7 @@ An installed binary still needs to match its GPU target, Python and Torch runtim
 Hardware support depends on ROCm/PyTorch; validation here covers RX 9070 XT.
 
 For manual installation, close ComfyUI and run `install_requirements.bat` to build/install the native components. ComfyUI-Easy-Install-AMD runs this automatically through its add-on menu.
-For prerequisites and manual commands, see [COMFYUI_ROCM_BUILD_GUIDE.md](COMFYUI_ROCM_BUILD_GUIDE.md).
+For prerequisites and manual commands, see [docs/AMD_BUILD.md](docs/AMD_BUILD.md).
 
 ComfyUI AMD installer: [BoomerCyb/ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD).
 
