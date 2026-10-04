@@ -101,6 +101,10 @@ VRAM depending on surface area and mesh complexity.
 
 ## AMD Edition Changes - 2026-10-03
 
+CuMesh uses HIP with hipCUB/rocPRIM, corrected sorting/header compatibility,
+and bounded or flat memory transfers for large meshes. The native backend is
+shared with CuMesh Decimate.
+
 - Uses ComfyUI's Python and reports installation failures before restarting.
 - Builds native HIP extensions for the active ROCm environment; matching HIP SDK and Visual Studio C++ Build Tools are required.
 - Supports group installation through [ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD).
