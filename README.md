@@ -13,7 +13,7 @@ Integrated-only systems remain supported; PyTorch supplies the compiler flags.
 An installed binary still needs to match its GPU target, Python and Torch runtime.
 Hardware support depends on ROCm/PyTorch; validation here covers RX 9070 XT.
 
-Run `install_requirements.bat` with ComfyUI closed to build/install the native components.
+For manual installation, close ComfyUI and run `install_requirements.bat` to build/install the native components. ComfyUI-Easy-Install-AMD runs this automatically through its add-on menu.
 For prerequisites and manual commands, see [COMFYUI_ROCM_BUILD_GUIDE.md](COMFYUI_ROCM_BUILD_GUIDE.md).
 
 ComfyUI AMD installer: [BoomerCyb/ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD).
@@ -65,11 +65,15 @@ removal.
 
 ## Installation
 
+### ComfyUI-Easy-Install-AMD
+
+In [ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD), select **Easy Menu → Add-ons → BoomerCyb WTiVo AMD Nodes**. It downloads the nodes and runs their installers automatically. You do not need to run `install_requirements.bat` separately. Wait for all five nodes to finish; EZi restarts ComfyUI after the group completes successfully.
+
+### Manual installation
+
 1. Place this repository in `ComfyUI/custom_nodes/ComfyUI-Mesh-Quad-Reconstruct-AMD`.
 2. Close ComfyUI and run `install_requirements.bat` using ComfyUI's Python.
-3. Restart ComfyUI after installation completes. With the EZi group add-on, wait for all five nodes to finish.
-
-You can also install this node through **Easy Menu → Add-ons → BoomerCyb WTiVo AMD Nodes** in [ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD).
+3. Restart ComfyUI after installation completes.
 
 ## Resolutions and memory
 
