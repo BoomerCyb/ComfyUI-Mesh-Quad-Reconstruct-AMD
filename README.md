@@ -2,6 +2,8 @@
 
 ## AMD / ROCm
 
+The installer uses ComfyUI's Python and stops if setup fails. When installing through EZi, wait for the entire node group to complete before restarting.
+
 This fork keeps the original node interface and adds native HIP support.
 Use the ROCm PyTorch installation that runs ComfyUI and a matching HIP SDK.
 The source does not select a card model or impose a gfx1201 target. Native
@@ -14,12 +16,8 @@ Hardware support depends on ROCm/PyTorch; validation here covers RX 9070 XT.
 Run `install_requirements.bat` with ComfyUI closed to build/install the native components.
 For prerequisites and manual commands, see [COMFYUI_ROCM_BUILD_GUIDE.md](COMFYUI_ROCM_BUILD_GUIDE.md).
 
-ComfyUI ROCm setup: [patientx-cfz/comfyui-rocm](https://github.com/patientx-cfz/comfyui-rocm).
+ComfyUI AMD installer: [BoomerCyb/ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD).
 
-The original documentation follows. For AMD installation, use the instructions
-above and the ROCm build guide in place of the original CUDA installation steps.
-
-# ComfyUI Mesh Quad Reconstruction
 
 Standalone adaptation of VisualBruno's **Trellis2 - Reconstruct Mesh With Quad**
 node for ComfyUI's current native mesh type:
@@ -29,7 +27,7 @@ MESH -> MESH
 ```
 
 It has no dependency on CelloCut or Trellis `MESHWITHVOXEL` objects. It calls the
-same CUDA function used by VisualBruno:
+same HIP function used by VisualBruno:
 
 ```python
 cumesh.remeshing.reconstruct_mesh_dc_quad(...)
@@ -45,7 +43,7 @@ Controls and defaults match VisualBruno where applicable:
 | --- | ---: | --- |
 | `remesh_band` | `1.0` | Voxel-band thickness. This adaptation fixes the original wrapper and actually passes it to CuMesh. |
 | `resolution` | `512` | Every multiple of 512 from 512 through 8192. |
-| `remove_floaters` | `true` | Uses the same VisualBruno/PyMeshLab 0.5% face-component rule on CUDA. |
+| `remove_floaters` | `true` | Uses the same VisualBruno/PyMeshLab 0.5% face-component rule on HIP. |
 | `remove_inner_faces` | `false` | Requests CuMesh's inner-surface filtering. It can create holes on difficult meshes. |
 
 Reconstruction creates new topology, so UVs, materials, textures, colors, and
@@ -53,13 +51,13 @@ custom normals are not preserved.
 
 ### Faster floater removal
 
-The default floater stage now stays on CUDA. It reproduces both parts of
+The default floater stage now stays on HIP. It reproduces both parts of
 VisualBruno's PyMeshLab operation: select face-connected components below 0.5%
 of the largest component (including MeshLab's integer-threshold truncation),
 then remove every vertex touched by that selection and all incident faces. Work
 is chunked in 1,048,576-face blocks to keep temporary allocations bounded.
 
-The node unloads inactive ComfyUI models before reconstruction. If the CUDA
+The node unloads inactive ComfyUI models before reconstruction. If the HIP
 connectivity stage still cannot allocate enough VRAM, the error is caught and
 the node automatically uses the original PyMeshLab implementation. This keeps
 the quality rule unchanged instead of crashing or silently disabling floater
@@ -67,15 +65,11 @@ removal.
 
 ## Installation
 
-1. Extract `ComfyUI-Mesh-Quad-Reconstruct` into `ComfyUI/custom_nodes/`.
-2. If VisualBruno's `ComfyUI-Trellis2` already works, restart ComfyUI. Its
-   installed CuMesh backend will be reused automatically.
-3. Otherwise run `Install-Windows.cmd`, then restart ComfyUI.
+1. Place this repository in `ComfyUI/custom_nodes/ComfyUI-Mesh-Quad-Reconstruct-AMD`.
+2. Close ComfyUI and run `install_requirements.bat` using ComfyUI's Python.
+3. Restart ComfyUI after installation completes. With the EZi group add-on, wait for all five nodes to finish.
 
-The manual installer first searches a sibling `ComfyUI-Trellis2/wheels` folder
-for a wheel matching ComfyUI's Python and PyTorch. If none exists, it builds
-VisualBruno/CuMesh from source, which requires Visual Studio C++ Build Tools and
-a compatible CUDA Toolkit.
+You can also install this node through **Easy Menu → Add-ons → BoomerCyb WTiVo AMD Nodes** in [ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD).
 
 ## Resolutions and memory
 
@@ -101,39 +95,10 @@ VRAM depending on surface area and mesh complexity.
 - Original ComfyUI wrapper:
   https://github.com/visualbruno/ComfyUI-Trellis2
 
+## AMD Edition Changes - 2026-10-03
 
+- Uses ComfyUI's Python and reports installation failures before restarting.
+- Builds native HIP extensions for the active ROCm environment; matching HIP SDK and Visual Studio C++ Build Tools are required.
+- Supports group installation through [ComfyUI-Easy-Install-AMD](https://github.com/BoomerCyb/ComfyUI-Easy-Install-AMD).
 
-## 🚀 SUPPORT MOSTAADTECH
-
-### ❤️ Enjoying this project / workflow?
-
-I’m **MostAadTech**, I create FREE ComfyUI workflows, local AI tools, 3D pipelines, and open-source projects.
-
-If this project or workflow helped you, **please consider following me or supporting my work**. It helps me keep building, testing, and releasing more free tools and workflows.
-
----
-
-## 💜 Support Me on Patreon
-
-👉 **[Support MostAadTech on Patreon](https://www.patreon.com/cw/MostafaAwad/membership)**
-
-Your support helps me spend more time developing **FREE AI tools, ComfyUI workflows, and 3D pipelines**.
-
----
-
-## 🌐 Follow MostAadTech
-
-* ▶️ **[YouTube](https://www.youtube.com/@MostAadTech)** — Tutorials, workflows & AI projects
-* 📸 **[Instagram](https://www.instagram.com/mostaadtech/)** — Projects, updates & behind the scenes
-* 𝕏 **[X / Twitter](https://x.com/MostAadTech)** — Updates, releases & experiments
-* 💻 **[GitHub](https://github.com/Mstafa-awad)** — Open-source projects & code
-
----
-
-### ⭐ One Follow Helps
-
-**Follow • Star • Share • Support**
-
-Every follow, GitHub star, share, and Patreon supporter helps me continue making **FREE tools for the AI community.**
-
-**Thank you for supporting MostAadTech! ❤️**
+Original node by [Mstafa-awad / MostAadTech](https://github.com/Mstafa-awad). AMD fork maintained by [BoomerCyb](https://github.com/BoomerCyb). Original license and third-party credits are retained.
