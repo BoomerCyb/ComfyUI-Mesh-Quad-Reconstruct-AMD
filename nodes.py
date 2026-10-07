@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
+import psutil
 import torch
 
 from comfy_api.latest import Types
@@ -9,6 +12,34 @@ from comfy_api.latest import Types
 RESOLUTIONS = list(range(512, 8193, 512))
 FLOATER_FACE_RATIO = 0.005
 CUDA_FILTER_CHUNK_FACES = 1_048_576
+
+# Headroom for CuMesh's own (non-Torch) allocations during reconstruction.
+VRAM_RESERVE_BYTES = 512 * 1024**2
+# Measured peaks on gfx1201 were ~166 B/face (CuMesh connectivity, raw HIP
+# allocations) and ~265 B/face of host RAM (PyMeshLab); keep some margin.
+GPU_FLOATER_BYTES_PER_FACE = 200
+CPU_FLOATER_BYTES_PER_FACE = 320
+GIB = 1024**3
+
+
+@contextmanager
+def _vram_cap():
+    """Make Torch raise OOM instead of spilling into shared system memory.
+
+    On Windows the driver lets allocations exceed physical VRAM by paging into
+    system RAM, which turns an oversized resolution into a near-hang that can
+    exhaust host memory. Torch's per-process fraction is enforced by its own
+    allocator, so exceeding physical VRAM raises OutOfMemoryError instead.
+    """
+    previous = torch.cuda.get_per_process_memory_fraction()
+    total = torch.cuda.mem_get_info()[1]
+    torch.cuda.set_per_process_memory_fraction(
+        max(0.1, (total - VRAM_RESERVE_BYTES) / total)
+    )
+    try:
+        yield
+    finally:
+        torch.cuda.set_per_process_memory_fraction(previous)
 
 
 def _require_cuda() -> None:
@@ -257,23 +288,44 @@ def _is_cuda_memory_error(exc: Exception) -> bool:
 
 def _remove_floaters_fast(cumesh_module, vertices, faces):
     """Prefer exact CUDA filtering; safely fall back to the original CPU path."""
-    try:
-        return _remove_floaters_cuda(cumesh_module, vertices, faces)
-    except Exception as exc:
-        reason = "insufficient VRAM" if _is_cuda_memory_error(exc) else str(exc)
-        print(
-            f"[Mesh Quad] CUDA floater filter unavailable ({reason}). "
-            "Falling back to VisualBruno's exact PyMeshLab filter.",
-            flush=True,
+    face_count = int(faces.shape[0])
+    # CuMesh allocates outside Torch, so release Torch's cached blocks first and
+    # check free VRAM: an over-allocation would spill instead of failing.
+    torch.cuda.empty_cache()
+    free_vram = torch.cuda.mem_get_info()[0]
+    gpu_need = face_count * GPU_FLOATER_BYTES_PER_FACE
+    reason = None
+    if gpu_need > free_vram:
+        reason = (
+            f"needs ~{gpu_need / GIB:.1f} GiB VRAM, {free_vram / GIB:.1f} GiB free"
         )
-        cpu_vertices, cpu_faces = _remove_floaters_visualbruno(
-            vertices.detach().cpu().numpy(),
-            faces.detach().cpu().numpy(),
+    else:
+        try:
+            return _remove_floaters_cuda(cumesh_module, vertices, faces)
+        except Exception as exc:
+            reason = "insufficient VRAM" if _is_cuda_memory_error(exc) else str(exc)
+    cpu_need = face_count * CPU_FLOATER_BYTES_PER_FACE
+    available_ram = psutil.virtual_memory().available
+    if cpu_need > available_ram:
+        raise RuntimeError(
+            f"remove_floaters cannot run on {face_count:,} faces: the GPU filter "
+            f"{reason}, and the CPU fallback needs ~{cpu_need / GIB:.0f} GiB RAM "
+            f"but {available_ram / GIB:.0f} GiB is available. Lower the "
+            "resolution or disable remove_floaters."
         )
-        return (
-            torch.from_numpy(cpu_vertices).contiguous().float(),
-            torch.from_numpy(cpu_faces).contiguous().long(),
-        )
+    print(
+        f"[Mesh Quad] CUDA floater filter unavailable ({reason}). "
+        "Falling back to VisualBruno's exact PyMeshLab filter.",
+        flush=True,
+    )
+    cpu_vertices, cpu_faces = _remove_floaters_visualbruno(
+        vertices.detach().cpu().numpy(),
+        faces.detach().cpu().numpy(),
+    )
+    return (
+        torch.from_numpy(cpu_vertices).contiguous().float(),
+        torch.from_numpy(cpu_faces).contiguous().long(),
+    )
 
 
 def _load_cumesh():
@@ -330,14 +382,31 @@ def _reconstruct_item(
     )
     # Same VisualBruno algorithm. Unlike the original wrapper, band is passed so
     # the visible remesh_band control genuinely works. Default 1.0 is identical.
-    with torch.inference_mode():
-        vertices, faces = reconstruct(
-            vertices,
-            faces,
-            resolution,
-            band=float(remesh_band),
-            verbose=True,
-            remove_inner_faces=bool(remove_inner_faces),
+    free_before, total = torch.cuda.mem_get_info()
+    out_of_memory = False
+    try:
+        with torch.inference_mode(), _vram_cap():
+            vertices, faces = reconstruct(
+                vertices,
+                faces,
+                resolution,
+                band=float(remesh_band),
+                verbose=True,
+                remove_inner_faces=bool(remove_inner_faces),
+            )
+    except Exception as exc:
+        if not _is_cuda_memory_error(exc):
+            raise
+        out_of_memory = True
+    if out_of_memory:
+        # Outside the except block the traceback, and the reconstruction
+        # tensors its frames reference, are gone, so the cache can be freed.
+        del vertices, faces
+        torch.cuda.empty_cache()
+        raise RuntimeError(
+            f"Quad Reconstruction at {resolution} needs more VRAM than this GPU has "
+            f"({free_before / GIB:.1f} of {total / GIB:.1f} GiB was free). Choose a "
+            "lower resolution or free VRAM used by other models."
         )
     if remove_floaters:
         with torch.inference_mode():
