@@ -350,6 +350,10 @@ class CuMesh:
             
             del_num_face = num_face - new_num_face
             if del_num_face / num_face < 1e-2:
+                if del_num_face == 0 and thresh > 1e38:
+                    # Every remaining collapse would flip a face or break
+                    # manifoldness; stop above the target instead of looping.
+                    break
                 thresh *= 10
             num_face = new_num_face
             
