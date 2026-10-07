@@ -139,9 +139,56 @@ inline __device__ bool process_incident_tri(
 }
 
 
+inline __device__ bool face_has_vertex(const int3& f, int v) {
+    return f.x == v || f.y == v || f.z == v;
+}
+
+
+/**
+ * Link condition for collapsing edge (e0, e1): the vertices adjacent to both
+ * endpoints must be exactly the opposite corners of the faces containing the
+ * edge. Otherwise the collapse glues two sheets of the surface together (for
+ * example the two sides of a thin part) and creates non-manifold edges and
+ * duplicate faces.
+ */
+inline __device__ bool link_condition_holds(
+    int e0,
+    int e1,
+    const int3* faces,
+    const int* vert2face,
+    const int* vert2face_offset
+) {
+    const int begin0 = vert2face_offset[e0], end0 = vert2face_offset[e0+1];
+    const int begin1 = vert2face_offset[e1], end1 = vert2face_offset[e1+1];
+    int shared_faces = 0;
+    int common_neighbors = 0;
+    for (int f = begin0; f < end0; f++) {
+        int3 f_vids = faces[vert2face[f]];
+        if (face_has_vertex(f_vids, e1)) shared_faces++;
+        int corners[3] = { f_vids.x, f_vids.y, f_vids.z };
+        for (int k = 0; k < 3; k++) {
+            int w = corners[k];
+            if (w == e0 || w == e1) continue;
+            // count each neighbor of e0 once
+            bool seen = false;
+            for (int j = 0; j < k && !seen; j++) seen = corners[j] == w;
+            for (int g = begin0; g < f && !seen; g++) seen = face_has_vertex(faces[vert2face[g]], w);
+            if (seen) continue;
+            for (int g = begin1; g < end1; g++) {
+                if (face_has_vertex(faces[vert2face[g]], w)) {
+                    common_neighbors++;
+                    break;
+                }
+            }
+        }
+    }
+    return common_neighbors == shared_faces;
+}
+
+
 /**
  * Get the cost for each edge collapse
- * 
+ *
  * @param vertices: the vertices of the mesh, shape (V)
  * @param faces: the faces of the mesh, shape (F)
  * @param vert2face: the buffer for neighbor face ids, shape (total_neighbor_face_cnt)
@@ -161,6 +208,7 @@ static __global__ void get_edge_collapse_cost_kernel(
     const int* vert2face_offset,
     const uint64_t* edges,
     const uint8_t * vert_is_boundary,
+    const uint8_t * vert_is_manifold,
     const QEM* qems,
     const int V,
     const int F,
@@ -176,6 +224,14 @@ static __global__ void get_edge_collapse_cost_kernel(
     uint64_t e = edges[tid];
     int e0 = int(e >> 32);
     int e1 = int(e & 0xFFFFFFFF);
+
+    // Enforce the link condition where the surface is locally manifold; regions
+    // that are already non-manifold keep the previous behavior.
+    if (vert_is_manifold[e0] && vert_is_manifold[e1] &&
+        !link_condition_holds(e0, e1, faces, vert2face, vert2face_offset)) {
+        edge_collapse_costs[tid] = INFINITY;
+        return;
+    }
 
     // get edge vertices
     Vec3f v0(vertices[e0]);
@@ -243,6 +299,7 @@ void get_edge_collapse_cost(
         ctx.vert2face_offset.ptr,
         ctx.edges.ptr,
         ctx.vert_is_boundary.ptr,
+        ctx.vert_is_manifold.ptr,
         reinterpret_cast<const QEM*>(ctx.temp_storage.ptr),
         V, F, E,
         lambda_edge_length, lambda_skinny,
@@ -355,7 +412,7 @@ static __global__ void collapse_edges_kernel(
     if (tid >= E) return;
 
     float cost = edge_collapse_costs[tid];
-    if (cost > collapse_thresh) return;
+    if (cost > collapse_thresh || isinf(cost)) return;  // infinite cost = invalid collapse
 
     // get edge
     uint64_t e = edges[tid];
@@ -536,6 +593,7 @@ std::tuple<int, int> CuMesh::simplify_step(float lambda_edge_length, float lambd
     if (timing) start = std::chrono::high_resolution_clock::now();
     this->get_edges();
     this->get_boundary_info();
+    this->get_vertex_is_manifold();
     if (timing) {
         CUDA_CHECK(hipDeviceSynchronize());
         end = std::chrono::high_resolution_clock::now();
