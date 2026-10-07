@@ -10,5 +10,5 @@ for name in ("_C", "_cubvh", "_xatlas"):
 class NativeDistribution(Distribution):
     def has_ext_modules(self):
         return True
-setup(packages=["cumesh"], package_data={"cumesh": ["*.pyd"]},
+setup(packages=["cumesh"], package_data={"cumesh": ["*.pyd", "_build_info.json"]},
       distclass=NativeDistribution)

@@ -111,16 +111,17 @@ def _native_environment():
     return env
 
 
-def _install(env):
+def _install(env, force_rebuild=False):
     _run([sys.executable, "-m", "pip", "install", "--no-build-isolation", "-r", "requirements.txt"], env)
-    _run([sys.executable, "CuMesh-HIP/build_hip.py"], env)
-    _run([sys.executable, "-m", "pip", "install", "./CuMesh-HIP", "--no-build-isolation", "--no-deps"], env)
-    _run([sys.executable, "-c", "import cumesh._C, cumesh._cubvh, cumesh._xatlas; print('CuMesh native modules loaded')"], env)
+    # Shared with the other AMD mesh node: keeps a newer installed cumesh, skips an
+    # identical rebuild and restores the previous package if installation fails.
+    _run([sys.executable, "CuMesh-HIP/install_cumesh.py"] + (["--force"] if force_rebuild else []), env)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="Check prerequisites without compiling or installing.")
+    parser.add_argument("--force-rebuild", action="store_true", help="Rebuild CuMesh even if the installed build is identical or newer.")
     parser.add_argument("--build-if-needed", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     import torch
@@ -135,7 +136,7 @@ def main():
     if args.check:
         print("[Installer] Prerequisites checked; no modules were compiled or installed.")
         return 0
-    _install(env)
+    _install(env, args.force_rebuild)
     print("[Installer] Installation completed. If installing a node group, wait for all installers before restarting ComfyUI.")
     return 0
 
