@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2017-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -46,7 +46,7 @@
 // Global coherence of prefixes_*_values is ensured by atomic_load/atomic_store that bypass
 // cache.
 #ifndef ROCPRIM_DETAIL_LOOKBACK_SCAN_STATE_WITHOUT_SLOW_FENCES
-    #if defined(__HIP_DEVICE_COMPILE__) && (defined(__gfx942__) || defined(__gfx950__) || defined(__gfx9_4_generic__))
+    #if defined(__HIP_DEVICE_COMPILE__) && (defined(__gfx942__) || defined(__gfx950__) || defined(__gfx9_4_generic__) || defined(__gfx1250__) || defined(__gfx1250_strict__))
         #define ROCPRIM_DETAIL_LOOKBACK_SCAN_STATE_WITHOUT_SLOW_FENCES 1
     #else
         #define ROCPRIM_DETAIL_LOOKBACK_SCAN_STATE_WITHOUT_SLOW_FENCES 0
@@ -116,8 +116,8 @@ constexpr const int MAX_PAYLOAD_SIZE = ROCPRIM_MAX_ATOMIC_SIZE - 1;
 ///
 /// \tparam T The accumulator type of the scan operation.
 /// \tparam UseSleep [optional] If true, the execution of a wavefront is paused for a short duration, allowing other threads or processes to execute during idle periods.
-/// \tparam IsSmall [optional] Dependent on the size of `T`. If it's smaller than 16 bytes, it's set to true.
-template<class T, bool UseSleep = false, bool IsSmall = (sizeof(T) <= 15)>
+/// \tparam IsSmall [optional] Dependent on the size of `T`. If it's smaller than 16 bytes (8 bytes if 16 byte atomics are possibly not supported), it's by default set to true.
+template<class T, bool UseSleep = false, bool IsSmall = (sizeof(T) <= MAX_PAYLOAD_SIZE)>
 struct lookback_scan_state;
 
 /// Reduce lanes `0-valid_items` and return the result in lane 0.
@@ -128,11 +128,22 @@ T lookback_reduce_forward_init(F scan_op, T block_prefix, unsigned int valid_ite
     T prefix = block_prefix;
     for(unsigned int i = 0; i < valid_items; ++i)
     {
-#ifdef ROCPRIM_DETAIL_HAS_DPP_WF
-        prefix = warp_move_dpp<T, 0x134 /* DPP_WF_RL1 */>(prefix);
-#else
-        prefix = warp_shuffle_down(prefix, 1, ::rocprim::arch::wavefront::size());
-#endif
+        // If ROCPRIM_HAS_PERMLANE() is true, DPP_WF_RL1 is not available.
+        if(ROCPRIM_HAS_PERMLANE())
+        {
+            prefix = warp_shuffle_down(prefix, 1, ::rocprim::arch::wavefront::size());
+        }
+        else
+        {
+            if(ROCPRIM_HAS_DPP())
+            {
+                prefix = warp_move_dpp<T, 0x134 /* DPP_WF_RL1 */>(prefix);
+            }
+            else
+            {
+                prefix = warp_shuffle_down(prefix, 1, ::rocprim::arch::wavefront::size());
+            }
+        }
         prefix = scan_op(prefix, block_prefix);
     }
     return prefix;
@@ -144,39 +155,61 @@ template<typename F, typename T>
 ROCPRIM_DEVICE ROCPRIM_INLINE
 T lookback_reduce_forward(F scan_op, T prefix, T block_prefix)
 {
-#ifdef ROCPRIM_DETAIL_HAS_DPP_WF
-    for(unsigned int i = 0; i < ::rocprim::arch::wavefront::size(); ++i)
+    // If ROCPRIM_HAS_PERMLANE() is true, DPP_WF_RL1 is not available.
+    if(ROCPRIM_HAS_PERMLANE())
     {
-        prefix = warp_move_dpp<T, 0x134 /* DPP_WF_RL1 */>(prefix);
-        prefix = scan_op(prefix, block_prefix);
-    }
-#elif ROCPRIM_DETAIL_USE_DPP == 1
-    // If we can't rotate or shift the entire wavefront in one instruction,
-    // iterate over rows of 16 lanes and use warp_readlane to communicate across rows.
-    constexpr const int row_size = 16;
-
-    for(int j = ::rocprim::arch::wavefront::size(); j > 0; j -= row_size)
-    {
-        prefix = warp_readlane(
-            prefix,
-            j /* automatically taken modulo ::rocprim::arch::wavefront::size(), first read is lane 0 */);
-        prefix = scan_op(prefix, block_prefix);
-
-        ROCPRIM_UNROLL
-        for(int i = 0; i < row_size - 1; ++i)
+        if(ROCPRIM_HAS_DPP())
         {
-            prefix = warp_move_dpp<T, 0x101 /* DPP_ROW_SL1 */>(prefix);
-            prefix = scan_op(prefix, block_prefix);
+            // If we can't rotate or shift the entire wavefront in one instruction,
+            // iterate over rows of 16 lanes and use warp_readlane to communicate across rows.
+            constexpr const int row_size = 16;
+
+            for(int j = ::rocprim::arch::wavefront::size(); j > 0; j -= row_size)
+            {
+                prefix = warp_readlane(
+                    prefix,
+                    j /* automatically taken modulo ::rocprim::arch::wavefront::size(), first read is lane 0 */);
+                prefix = scan_op(prefix, block_prefix);
+
+                ROCPRIM_UNROLL
+                for(int i = 0; i < row_size - 1; ++i)
+                {
+                    prefix = warp_move_dpp<T, 0x101 /* DPP_ROW_SL1 */>(prefix);
+                    prefix = scan_op(prefix, block_prefix);
+                }
+            }
+        }
+        else
+        {
+            // If no DPP available at all, fall back to shuffles.
+            for(unsigned int i = 0; i < ::rocprim::arch::wavefront::size(); ++i)
+            {
+                prefix = warp_shuffle(prefix, lane_id() + 1, ::rocprim::arch::wavefront::size());
+                prefix = scan_op(prefix, block_prefix);
+            }
         }
     }
-#else
-    // If no DPP available at all, fall back to shuffles.
-    for(unsigned int i = 0; i < ::rocprim::arch::wavefront::size(); ++i)
+    else
     {
-        prefix = warp_shuffle(prefix, lane_id() + 1, ::rocprim::arch::wavefront::size());
-        prefix = scan_op(prefix, block_prefix);
+        if(ROCPRIM_HAS_DPP())
+        {
+            for(unsigned int i = 0; i < ::rocprim::arch::wavefront::size(); ++i)
+            {
+                prefix = warp_move_dpp<T, 0x134 /* DPP_WF_RL1 */>(prefix);
+                prefix = scan_op(prefix, block_prefix);
+            }
+        }
+        else
+        {
+            // If no DPP available at all, fall back to shuffles.
+            for(unsigned int i = 0; i < ::rocprim::arch::wavefront::size(); ++i)
+            {
+                prefix = warp_shuffle(prefix, lane_id() + 1, ::rocprim::arch::wavefront::size());
+                prefix = scan_op(prefix, block_prefix);
+            }
+        }
     }
-#endif
+
     return prefix;
 }
 
@@ -475,7 +508,7 @@ struct lookback_scan_state<T, UseSleep, false>
 {
 
 public:
-    using flag_underlying_type = std::underlying_type_t<lookback_scan_prefix_flag>;
+    using flag_cast_type       = uint32_t;
     using value_type           = T;
 
     static constexpr bool use_sleep = UseSleep;
@@ -508,7 +541,7 @@ public:
         state.prefixes_complete_values = ptr;
         ptr += ::rocprim::detail::align_size(n * sizeof(value_underlying_type));
 
-        state.prefixes_flags = reinterpret_cast<flag_underlying_type*>(ptr);
+        state.prefixes_flags = reinterpret_cast<flag_cast_type*>(ptr);
 
         return error;
     }
@@ -535,7 +568,7 @@ public:
         // Always use sizeof(value_underlying_type) instead of sizeof(T) because storage is
         // allocated by host so it can hold both types no matter what device is used.
         storage_size = 2 * ::rocprim::detail::align_size(n * sizeof(value_underlying_type));
-        storage_size += n * sizeof(lookback_scan_prefix_flag);
+        storage_size += n * sizeof(flag_cast_type);
         return error;
     }
 
@@ -556,8 +589,8 @@ public:
                                                      detail::temp_storage::layout& layout)
     {
         size_t storage_size = 0;
-        size_t alignment    = std::max(
-            {alignof(lookback_scan_prefix_flag), alignof(T), alignof(value_underlying_type)});
+        size_t alignment
+            = std::max({alignof(flag_cast_type), alignof(T), alignof(value_underlying_type)});
         hipError_t error = get_storage_size(number_of_blocks, stream, storage_size);
         layout           = detail::temp_storage::layout{storage_size, alignment};
         return error;
@@ -574,12 +607,12 @@ public:
         if(block_id < number_of_blocks)
         {
             prefixes_flags[padding + block_id]
-                = static_cast<flag_underlying_type>(lookback_scan_prefix_flag::empty);
+                = static_cast<flag_cast_type>(lookback_scan_prefix_flag::empty);
         }
         if(block_id < padding)
         {
             prefixes_flags[block_id]
-                = static_cast<flag_underlying_type>(lookback_scan_prefix_flag::invalid);
+                = static_cast<flag_cast_type>(lookback_scan_prefix_flag::invalid);
         }
     }
 
@@ -603,17 +636,18 @@ public:
         this->set(block_id, lookback_scan_prefix_flag::complete, value);
     }
 
-    /// \brief This device function queries the value and the flag of the given prefix.
+    /// \brief This device function queries the value of the given prefix, given a known flag.
     ///
     /// \param [in] block_id the index of the prefix to be queried.
-    /// \param [out] flag the flag of the prefix.
+    /// \param [in] flag the flag of the prefix.
     /// \param [out] value the value of the prefix.
     ROCPRIM_DEVICE ROCPRIM_INLINE
-    void get(const unsigned int block_id, lookback_scan_prefix_flag& flag, T& value)
+    void get_value_with_known_flag(const unsigned int              block_id,
+                                   const lookback_scan_prefix_flag flag,
+                                   T&                              value)
     {
         const unsigned int padding = ::rocprim::arch::wavefront::size();
 
-        flag = this->get_flag(block_id);
 #if ROCPRIM_DETAIL_LOOKBACK_SCAN_STATE_WITHOUT_SLOW_FENCES
         rocprim::detail::atomic_fence_acquire_order_only();
 
@@ -625,7 +659,7 @@ public:
         {
             v.words[i] = ::rocprim::detail::atomic_load(&values[padding + block_id].words[i]);
         }
-        __builtin_memcpy(&value, &v, sizeof(value));
+        __builtin_memcpy(reinterpret_cast<void*>(&value), &v, sizeof(value));
 #else
         ::rocprim::detail::memory_fence_device();
 
@@ -634,6 +668,19 @@ public:
                                                        : prefixes_complete_values);
         value              = values[padding + block_id];
 #endif
+    }
+
+    /// \brief This device function queries the value and the flag of the given prefix.
+    ///
+    /// \param [in] block_id the index of the prefix to be queried.
+    /// \param [out] flag the flag of the prefix.
+    /// \param [out] value the value of the prefix.
+    ROCPRIM_DEVICE ROCPRIM_INLINE
+    void get(const unsigned int block_id, lookback_scan_prefix_flag& flag, T& value)
+    {
+        flag = this->get_flag(block_id);
+
+        this->get_value_with_known_flag(block_id, flag, value);
     }
 
     /// \brief This device function queries the value of the given prefix. It should only be called after all the blocks/prefixes are complete.
@@ -654,7 +701,7 @@ public:
         {
             v.words[i] = ::rocprim::detail::atomic_load(&values[padding + block_id].words[i]);
         }
-        __builtin_memcpy(&value, &v, sizeof(value));
+        __builtin_memcpy(reinterpret_cast<void*>(&value), &v, sizeof(value));
         return value;
 #else
         const auto* values = static_cast<const T*>(prefixes_complete_values);
@@ -675,7 +722,7 @@ public:
         {
             v.words[i] = ::rocprim::detail::atomic_load(&values[padding + block_id].words[i]);
         }
-        __builtin_memcpy(&value, &v, sizeof(value));
+        __builtin_memcpy(reinterpret_cast<void*>(&value), &v, sizeof(value));
         return value;
 #else
         const auto* values = static_cast<const T*>(prefixes_partial_values);
@@ -734,7 +781,7 @@ public:
         }
 
         T block_prefix;
-        this->get(lookback_block_id, flag, block_prefix);
+        this->get_value_with_known_flag(lookback_block_id, flag, block_prefix);
 
         // Now just sum all these values to get the prefix
         // Note that the values are striped across the threads.
@@ -770,7 +817,8 @@ private:
 
         lookback_scan_prefix_flag flag = static_cast<lookback_scan_prefix_flag>(
             ::rocprim::detail::atomic_load(&prefixes_flags[padding + block_id]));
-        while(flag == lookback_scan_prefix_flag::empty)
+
+        while(::rocprim::detail::warp_any(flag == lookback_scan_prefix_flag::empty))
         {
             if(UseSleep)
             {
@@ -796,7 +844,7 @@ private:
             flag == lookback_scan_prefix_flag::partial ? prefixes_partial_values
                                                        : prefixes_complete_values);
         value_underlying_type v;
-        __builtin_memcpy(&v, &value, sizeof(value));
+        __builtin_memcpy(&v, reinterpret_cast<const void*>(&value), sizeof(value));
         for(unsigned int i = 0; i < value_underlying_type::words_no; ++i)
         {
             ::rocprim::detail::atomic_store(&values[padding + block_id].words[i], v.words[i]);
@@ -812,7 +860,7 @@ private:
 #endif
 
         ::rocprim::detail::atomic_store(&prefixes_flags[padding + block_id],
-                                        static_cast<flag_underlying_type>(flag));
+                                        static_cast<flag_cast_type>(flag));
     }
 
     struct value_underlying_type
@@ -827,7 +875,7 @@ private:
     // not stored in single instruction).
     void*                 prefixes_partial_values;
     void*                 prefixes_complete_values;
-    flag_underlying_type* prefixes_flags;
+    flag_cast_type*       prefixes_flags;
 };
 
 template<class T,
@@ -1002,7 +1050,7 @@ hipError_t is_sleep_scan_state_used(const hipStream_t stream, bool& use_sleep)
     {
         return error;
     }
-    else if(const hipError_t error = hipGetDeviceProperties(&prop, device_id))
+    if(const hipError_t error = hipGetDeviceProperties(&prop, device_id))
     {
         return error;
     }
@@ -1018,7 +1066,8 @@ hipError_t is_sleep_scan_state_used(const hipStream_t stream, bool& use_sleep)
 template<typename LookbackScanState>
 constexpr bool is_lookback_kernel_runnable()
 {
-    if(device_target_arch() == target_arch::gfx908)
+#if (!defined(ROCPRIM_TARGET_SPIRV) || ROCPRIM_TARGET_SPIRV == 0) && __has_builtin(__builtin_amdgcn_processor_is)
+    if constexpr(__builtin_amdgcn_processor_is("gfx908"))
     {
         // For gfx908 kernels with both version of lookback_scan_state can run: with and without
         // sleep
@@ -1026,6 +1075,9 @@ constexpr bool is_lookback_kernel_runnable()
     }
     // For other GPUs only a kernel without sleep can run
     return !LookbackScanState::use_sleep;
+#else
+    return true;
+#endif
 }
 
 template<typename T>

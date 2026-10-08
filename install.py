@@ -64,6 +64,50 @@ def _default_jobs():
     return max(2, min((os.cpu_count() or 4) // 2, ram_jobs, 16))
 
 
+def _hip_version(sdk):
+    """HIP major.minor of an SDK, read from bin/.hipVersion."""
+    try:
+        text = (Path(sdk) / "bin/.hipVersion").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    values = dict(line.split("=", 1) for line in text.splitlines() if "=" in line and not line.startswith("#"))
+    if "HIP_VERSION_MAJOR" not in values or "HIP_VERSION_MINOR" not in values:
+        return None
+    return values["HIP_VERSION_MAJOR"].strip() + "." + values["HIP_VERSION_MINOR"].strip()
+
+
+def _rocm_sdk(env):
+    """The ROCm SDK to compile with.
+
+    Prefer the SDK installed with this PyTorch (rocm-sdk-devel, then rocm-sdk-core),
+    which matches the HIP runtime PyTorch loads. ROCM_HOME, HIP_PATH and ROCM_PATH
+    are used only when PyTorch brought no SDK: the AMD HIP SDK installer sets
+    HIP_PATH system-wide, so it can name another HIP version or a removed install.
+    """
+    import torch
+    torch_hip = ".".join((torch.version.hip or "").split(".")[:2])
+    configured = [(key, env[key]) for key in ("ROCM_HOME", "HIP_PATH", "ROCM_PATH") if env.get(key)]
+    for name in ("_rocm_sdk_devel", "_rocm_sdk_core"):
+        spec = importlib.util.find_spec(name)
+        if spec and spec.origin:
+            sdk = Path(spec.origin).parent
+            if (sdk / "lib/llvm/bin/clang-cl.exe").is_file():
+                for key, value in configured:
+                    if Path(value).resolve() != sdk.resolve():
+                        print(f"[Installer] Ignoring {key}={value}; using the ROCm SDK installed with PyTorch.")
+                return str(sdk)
+    for key, value in configured:
+        if (Path(value) / "lib/llvm/bin/clang-cl.exe").is_file():
+            sdk_hip = _hip_version(value)
+            if sdk_hip and torch_hip and sdk_hip != torch_hip:
+                print(f"[Installer] WARNING: {key}={value} is HIP {sdk_hip} but PyTorch uses HIP {torch_hip}; "
+                      "modules built with a different HIP version may fail to load.")
+            return value
+    raise RuntimeError(
+        "No ROCm SDK with clang-cl was found. Install the ROCm SDK packages that match your PyTorch "
+        "(rocm-sdk-devel), or set ROCM_HOME to a Windows HIP SDK with the same HIP version as PyTorch.")
+
+
 def _native_environment():
     if os.name != "nt":
         raise RuntimeError("This native build currently supports Windows x64.")
@@ -72,17 +116,7 @@ def _native_environment():
     if not include.is_file() or not library.is_file():
         raise RuntimeError('ComfyUI Python development files are missing: '+str(include)+' or '+str(library)+'. Native compilation needs matching Python headers and the import library.')
     env = {key.upper(): value for key, value in os.environ.items()}
-    sdk = env.get("ROCM_HOME") or env.get("HIP_PATH") or env.get("ROCM_PATH")
-    if not sdk:
-        for name in ("_rocm_sdk_core", "_rocm_sdk_devel"):
-            spec = importlib.util.find_spec(name)
-            if spec and spec.origin:
-                candidate = Path(spec.origin).parent
-                if (candidate / "lib/llvm/bin/clang-cl.exe").is_file():
-                    sdk = str(candidate)
-                    break
-    if not sdk or not (Path(sdk) / "lib/llvm/bin/clang-cl.exe").is_file():
-        raise RuntimeError("Set ROCM_HOME to the matching Windows HIP SDK directory.")
+    sdk = _rocm_sdk(env)
 
     vswhere = Path(env.get("PROGRAMFILES(X86)", "C:/Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
     if not vswhere.is_file():

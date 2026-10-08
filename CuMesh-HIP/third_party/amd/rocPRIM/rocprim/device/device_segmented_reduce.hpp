@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2017-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -25,8 +25,8 @@
 #include <iterator>
 #include <type_traits>
 
-#include "../config.hpp"
 #include "../common.hpp"
+#include "../config.hpp"
 #include "../detail/various.hpp"
 #include "../functional.hpp"
 
@@ -34,11 +34,12 @@
 #include "detail/device_segmented_reduce.hpp"
 #include "rocprim/type_traits.hpp"
 
-BEGIN_ROCPRIM_NAMESPACE
-
 /// \addtogroup devicemodule
 /// @{
 
+BEGIN_ROCPRIM_NAMESPACE
+
+#ifndef DOXYGEN_SHOULD_SKIP_THIS // Do not document
 namespace detail
 {
 
@@ -46,58 +47,30 @@ template<class Config,
          class InputIterator,
          class OutputIterator,
          class OffsetIterator,
-         class ResultType,
+         class InitValueType,
          class BinaryFunction>
-ROCPRIM_KERNEL ROCPRIM_LAUNCH_BOUNDS(device_params<Config>().reduce_config.block_size) void
-    segmented_reduce_kernel(InputIterator  input,
-                            OutputIterator output,
-                            OffsetIterator begin_offsets,
-                            OffsetIterator end_offsets,
-                            BinaryFunction reduce_op,
-                            ResultType     initial_value)
+inline hipError_t segmented_reduce_impl(void*          temporary_storage,
+                                        size_t&        storage_size,
+                                        InputIterator  input,
+                                        OutputIterator output,
+                                        unsigned int   segments,
+                                        OffsetIterator begin_offsets,
+                                        OffsetIterator end_offsets,
+                                        BinaryFunction reduce_op,
+                                        InitValueType  initial_value,
+                                        hipStream_t    stream,
+                                        bool           debug_synchronous)
 {
-    segmented_reduce<Config>(
-        input, output,
-        begin_offsets, end_offsets,
-        reduce_op, initial_value
-    );
-}
-
-template<
-    class Config,
-    class InputIterator,
-    class OutputIterator,
-    class OffsetIterator,
-    class InitValueType,
-    class BinaryFunction
->
-inline
-hipError_t segmented_reduce_impl(void * temporary_storage,
-                                 size_t& storage_size,
-                                 InputIterator input,
-                                 OutputIterator output,
-                                 unsigned int segments,
-                                 OffsetIterator begin_offsets,
-                                 OffsetIterator end_offsets,
-                                 BinaryFunction reduce_op,
-                                 InitValueType initial_value,
-                                 hipStream_t stream,
-                                 bool debug_synchronous)
-{
-    using input_type = typename std::iterator_traits<InputIterator>::value_type;
+    using input_type  = typename std::iterator_traits<InputIterator>::value_type;
     using result_type = ::rocprim::accumulator_t<BinaryFunction, input_type>;
 
-    using config = wrapped_segmented_reduce_config<Config, result_type>;
+    using Selector = segmented_reduce_config_selector<result_type>;
 
-    detail::target_arch target_arch;
-    hipError_t          result = host_target_arch(stream, target_arch);
-    if(result != hipSuccess)
-    {
-        return result;
-    }
-    const reduce_config_params params = dispatch_target_arch<config>(target_arch);
+    const target current_target(stream);
 
-    const unsigned int block_size = params.reduce_config.block_size;
+    const auto params = get_config<Selector>(Config{}, current_target);
+
+    const unsigned int block_size = params.kernel_config.block_size;
 
     if(temporary_storage == nullptr)
     {
@@ -107,27 +80,51 @@ hipError_t segmented_reduce_impl(void * temporary_storage,
         return hipSuccess;
     }
 
-    if( segments == 0u )
+    if(segments == 0u)
         return hipSuccess;
+
+    // HIP supports (2^32 - 1) max threads.  We have to ensure block_size * segments
+    // doesn't exceed that.  Compute the maximum number of segments:
+    const size_t max_segments = 0xffffffff / static_cast<size_t>(block_size);
 
     std::chrono::steady_clock::time_point start;
 
-    if(debug_synchronous) start = std::chrono::steady_clock::now();
-    hipLaunchKernelGGL(
-        HIP_KERNEL_NAME(segmented_reduce_kernel<config>),
-        dim3(segments), dim3(block_size), 0, stream,
-        input, output,
-        begin_offsets, end_offsets,
-        reduce_op, static_cast<result_type>(initial_value)
-    );
-    ROCPRIM_DETAIL_HIP_SYNC_AND_RETURN_ON_ERROR("segmented_reduce", segments, start);
+    if(debug_synchronous)
+    {
+        start = std::chrono::steady_clock::now();
+    }
+
+    // If the number of segments is greater than max_segments, split the
+    // work into multiple kernel calls.
+    for (size_t offset = 0; offset < segments; offset += max_segments) {
+        size_t remaining_segments = segments - offset;
+        size_t batch_size = std::min(max_segments, remaining_segments);
+
+        auto segmented_reduce_kernel = [=](auto target_config)
+        {
+            segmented_reduce<decltype(target_config)>(input,
+                                                      output + offset,
+                                                      begin_offsets + offset,
+                                                      end_offsets + offset,
+                                                      reduce_op,
+                                                      static_cast<result_type>(initial_value));
+        };
+
+        ROCPRIM_RETURN_ON_ERROR(execute_launch_plan<Config, Selector>(current_target,
+                                                                      segmented_reduce_kernel,
+                                                                      dim3(batch_size),
+                                                                      dim3(block_size),
+                                                                      0,
+                                                                      stream));
+        ROCPRIM_DETAIL_HIP_SYNC_AND_RETURN_ON_ERROR("segmented_reduce", batch_size, start);
+    }
 
     return hipSuccess;
 }
 
+} // namespace detail
 
-
-} // end of detail namespace
+#endif // DOXYGEN_SHOULD_SKIP_THIS
 
 /// \brief Parallel segmented reduction primitive for device level.
 ///
@@ -182,12 +179,14 @@ hipError_t segmented_reduce_impl(void * temporary_storage,
 /// In this example a device-level segmented min-reduction operation is performed on an array of
 /// integer values (<tt>short</tt>s are reduced into <tt>int</tt>s) using custom operator.
 ///
+/// The full example is [on GitHub](https://github.com/ROCm/rocm-libraries/tree/develop/projects/rocprim/example/rocprim/device/example_device_segmented_reduce.cpp).
+///
 /// \code{.cpp}
 /// #include <rocprim/rocprim.hpp>
 ///
 /// // custom reduce function
 /// auto min_op =
-///     [] __device__ (int a, int b) -> int
+///     [] (int a, int b) -> int
 ///     {
 ///         return a < b ? a : b;
 ///     };
@@ -222,39 +221,41 @@ hipError_t segmented_reduce_impl(void * temporary_storage,
 /// // output: [4, 6, 1]
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class OutputIterator,
-    class OffsetIterator,
-    class BinaryFunction = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>,
-    class InitValueType = typename std::iterator_traits<InputIterator>::value_type
->
-inline
-hipError_t segmented_reduce(void * temporary_storage,
-                            size_t& storage_size,
-                            InputIterator input,
-                            OutputIterator output,
-                            unsigned int segments,
-                            OffsetIterator begin_offsets,
-                            OffsetIterator end_offsets,
-                            BinaryFunction reduce_op = BinaryFunction(),
-                            InitValueType initial_value = InitValueType(),
-                            hipStream_t stream = 0,
-                            bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class OutputIterator,
+         class OffsetIterator,
+         class BinaryFunction
+         = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>,
+         class InitValueType = typename std::iterator_traits<InputIterator>::value_type>
+inline hipError_t segmented_reduce(void*          temporary_storage,
+                                   size_t&        storage_size,
+                                   InputIterator  input,
+                                   OutputIterator output,
+                                   unsigned int   segments,
+                                   OffsetIterator begin_offsets,
+                                   OffsetIterator end_offsets,
+                                   BinaryFunction reduce_op         = BinaryFunction(),
+                                   InitValueType  initial_value     = InitValueType(),
+                                   hipStream_t    stream            = 0,
+                                   bool           debug_synchronous = false)
 {
-    return detail::segmented_reduce_impl<Config>(
-        temporary_storage, storage_size,
-        input, output,
-        segments, begin_offsets, end_offsets,
-        reduce_op, initial_value,
-        stream, debug_synchronous
-    );
+    return detail::segmented_reduce_impl<Config>(temporary_storage,
+                                                 storage_size,
+                                                 input,
+                                                 output,
+                                                 segments,
+                                                 begin_offsets,
+                                                 end_offsets,
+                                                 reduce_op,
+                                                 initial_value,
+                                                 stream,
+                                                 debug_synchronous);
 }
+
+END_ROCPRIM_NAMESPACE
 
 /// @}
 // end of group devicemodule
-
-END_ROCPRIM_NAMESPACE
 
 #endif // ROCPRIM_DEVICE_DEVICE_SEGMENTED_REDUCE_HPP_

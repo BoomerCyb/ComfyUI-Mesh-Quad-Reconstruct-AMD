@@ -61,6 +61,8 @@ BEGIN_ROCPRIM_NAMESPACE
 /// In the examples exchange operation is performed on block of 128 threads, using type
 /// \p int with 8 items per thread.
 ///
+/// The full example is [on GitHub](https://github.com/ROCm/rocm-libraries/tree/develop/projects/rocprim/example/rocprim/block/example_block_exchange.cpp).
+///
 /// \code{.cpp}
 /// __global__ void example_kernel(...)
 /// {
@@ -668,7 +670,7 @@ public:
     {
         static_assert(detail::is_power_of_two(VirtualWaveSize)
                           && VirtualWaveSize <= arch::wavefront::max_size(),
-                      "VirtualWaveSize must be a power of two and equal or less"
+                      "VirtualWaveSize must be a power of two and equal or less "
                       "than the size of hardware warp.");
         assert(VirtualWaveSize <= arch::wavefront::size());
 

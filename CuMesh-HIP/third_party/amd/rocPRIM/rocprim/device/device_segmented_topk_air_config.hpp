@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -18,24 +18,34 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#ifndef ROCPRIM_VERSION_HPP_
-#define ROCPRIM_VERSION_HPP_
+#ifndef ROCPRIM_DEVICE_DEVICE_SEGMENTED_TOPK_CONFIG_HPP_
+#define ROCPRIM_DEVICE_DEVICE_SEGMENTED_TOPK_CONFIG_HPP_
 
-/// \def ROCPRIM_VERSION
-/// \brief rocPRIM library version
-///
-/// Version number may not be visible in the documentation.
-///
-/// ROCPRIM_VERSION % 100 is the patch level,
-/// ROCPRIM_VERSION / 100 % 1000 is the minor version,
-/// ROCPRIM_VERSION / 100000 is the major version.
-///
-/// For example, if ROCPRIM_VERSION is 100500, then the major version is 1,
-/// the minor version is 5, and the patch level is 0.
-#define ROCPRIM_VERSION @rocprim_VERSION_NUMBER@
+#include "config_types.hpp"
+#include "detail/config/device_segmented_topk_air.hpp"
+#include "detail/device_config_helper.hpp"
 
-#define ROCPRIM_VERSION_MAJOR @rocprim_VERSION_MAJOR@
-#define ROCPRIM_VERSION_MINOR @rocprim_VERSION_MINOR@
-#define ROCPRIM_VERSION_PATCH @rocprim_VERSION_PATCH@
+BEGIN_ROCPRIM_NAMESPACE
 
-#endif // ROCPRIM_VERSION_HPP_
+namespace detail
+{
+
+template<class Key, class Value, class SizeOut>
+struct segmented_topk_air_config_selector
+{
+    using targets    = segmented_topk_air_targets;
+    using param_type = segmented_topk_air_config_params;
+
+    param_type params;
+
+    template<class Target>
+    constexpr segmented_topk_air_config_selector(Target)
+        : params(segmented_topk_air_config_picker<Target, Key, Value, SizeOut>())
+    {}
+};
+
+} // namespace detail
+
+END_ROCPRIM_NAMESPACE
+
+#endif // ROCPRIM_DEVICE_DEVICE_SEGMENTED_TOPK_CONFIG_HPP_
