@@ -75,6 +75,8 @@ BEGIN_ROCPRIM_NAMESPACE
 /// \parblock
 /// In this example multiple sections of data are copied from \p a to \p b .
 ///
+/// The full example is [on GitHub](https://github.com/ROCm/rocm-libraries/tree/develop/projects/rocprim/example/rocprim/device/example_device_copy.cpp).
+///
 /// \code{.cpp}
 /// #include <rocprim/rocprim.hpp
 ///
@@ -120,21 +122,22 @@ BEGIN_ROCPRIM_NAMESPACE
 /// //                2nd copy
 /// \endcode
 /// \endparblock
-template<class Config_ = default_config,
+template<class Config = default_config,
          class InputBufferItType,
          class OutputBufferItType,
          class BufferSizeItType>
-ROCPRIM_INLINE static hipError_t batch_copy(void*              temporary_storage,
-                                            size_t&            storage_size,
-                                            InputBufferItType  sources,
-                                            OutputBufferItType destinations,
-                                            BufferSizeItType   sizes,
-                                            uint32_t           num_copies,
-                                            hipStream_t        stream            = hipStreamDefault,
-                                            bool               debug_synchronous = false)
+ROCPRIM_INLINE
+static hipError_t batch_copy(void*              temporary_storage,
+                             size_t&            storage_size,
+                             InputBufferItType  sources,
+                             OutputBufferItType destinations,
+                             BufferSizeItType   sizes,
+                             uint32_t           num_copies,
+                             hipStream_t        stream            = hipStreamDefault,
+                             bool               debug_synchronous = false)
 {
     return detail::
-        batch_memcpy_func<Config_, InputBufferItType, OutputBufferItType, BufferSizeItType, false>(
+        batch_memcpy_func<Config, InputBufferItType, OutputBufferItType, BufferSizeItType, false>(
             temporary_storage,
             storage_size,
             sources,

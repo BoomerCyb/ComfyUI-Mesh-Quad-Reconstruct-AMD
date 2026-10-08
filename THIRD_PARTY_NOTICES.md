@@ -13,4 +13,4 @@ Modified CuMesh source is bundled in `CuMesh-HIP/`. PyMeshLab remains an externa
 
 ## Bundled HIP backend
 
-CuMesh sources originate from VisualBruno/CuMesh commit d10e54c30ddd03d11472c1431693f985501c7966. The backend retains its MIT license, third-party Eigen, cubvh and xatlas source notices, and AMD hipCUB, rocPRIM and rocThrust headers from rocm-7.0.0 with their licenses. These components retain their own terms; see the license files under CuMesh-HIP/.
+CuMesh sources originate from VisualBruno/CuMesh commit d10e54c30ddd03d11472c1431693f985501c7966. The backend retains its MIT license, third-party Eigen, cubvh and xatlas source notices, and AMD hipCUB 4.7.0, rocPRIM 4.8.0 and rocThrust 4.7.0 headers (from the ROCm 10.2.0 SDK) with their license files under CuMesh-HIP/third_party/amd; builds use the ROCm SDK's own copies of these headers when present. These components retain their own terms; see the license files under CuMesh-HIP/.

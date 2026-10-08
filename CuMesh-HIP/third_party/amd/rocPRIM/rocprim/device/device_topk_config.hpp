@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -18,24 +18,34 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#ifndef HIPCUB_VERSION_HPP_
-#define HIPCUB_VERSION_HPP_
+#ifndef ROCPRIM_DEVICE_DEVICE_TOPK_CONFIG_HPP_
+#define ROCPRIM_DEVICE_DEVICE_TOPK_CONFIG_HPP_
 
-/// \def HIPCUB_VERSION
-/// \brief hipCUB library version
-///
-/// Version number may not be visible in the documentation.
-///
-/// HIPCUB_VERSION % 100 is the patch level,
-/// HIPCUB_VERSION / 100 % 1000 is the minor version,
-/// HIPCUB_VERSION / 100000 is the major version.
-///
-/// For example, if HIPCUB_VERSION is 100500, then the major version is 1,
-/// the minor version is 5, and the patch level is 0.
-#define HIPCUB_VERSION @hipcub_VERSION_NUMBER@
+#include "config_types.hpp"
+#include "detail/config/device_topk_air.hpp"
+#include "detail/device_config_helper.hpp"
 
-#define HIPCUB_VERSION_MAJOR @hipcub_VERSION_MAJOR@
-#define HIPCUB_VERSION_MINOR @hipcub_VERSION_MINOR@
-#define HIPCUB_VERSION_PATCH @hipcub_VERSION_PATCH@
+BEGIN_ROCPRIM_NAMESPACE
 
-#endif // HIPCUB_VERSION_HPP_
+namespace detail
+{
+
+template<class Key, class Value, class SizeIn>
+struct topk_air_config_selector
+{
+    using targets    = topk_air_targets;
+    using param_type = topk_air_config_params;
+
+    param_type params;
+
+    template<class Target>
+    constexpr topk_air_config_selector(Target)
+        : params(topk_air_config_picker<Target, Key, Value, SizeIn>())
+    {}
+};
+
+} // namespace detail
+
+END_ROCPRIM_NAMESPACE
+
+#endif // ROCPRIM_DEVICE_DEVICE_TOPK_CONFIG_HPP_

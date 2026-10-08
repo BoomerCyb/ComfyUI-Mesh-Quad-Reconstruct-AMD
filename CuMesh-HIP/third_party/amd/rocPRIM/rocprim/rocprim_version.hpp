@@ -32,10 +32,10 @@
 ///
 /// For example, if ROCPRIM_VERSION is 100500, then the major version is 1,
 /// the minor version is 5, and the patch level is 0.
-#define ROCPRIM_VERSION 300500
+#define ROCPRIM_VERSION 400800
 
 #define ROCPRIM_VERSION_MAJOR 4
-#define ROCPRIM_VERSION_MINOR 0
+#define ROCPRIM_VERSION_MINOR 8
 #define ROCPRIM_VERSION_PATCH 0
 
 #endif // ROCPRIM_VERSION_HPP_

@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2018-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -21,26 +21,20 @@
 #ifndef ROCPRIM_DEVICE_DEVICE_SELECT_HPP_
 #define ROCPRIM_DEVICE_DEVICE_SELECT_HPP_
 
-#include <type_traits>
 #include <iterator>
+#include <type_traits>
 
 #include "../config.hpp"
 #include "../detail/various.hpp"
-#include "../detail/binary_op_wrappers.hpp"
-
 #include "../iterator/transform_iterator.hpp"
+#include "../thread/thread_operators.hpp"
 
 #include "device_partition.hpp"
-
-BEGIN_ROCPRIM_NAMESPACE
 
 /// \addtogroup devicemodule
 /// @{
 
-namespace detail
-{
-
-} // end detail namespace
+BEGIN_ROCPRIM_NAMESPACE
 
 /// \brief Parallel select primitive for device level using range of flags.
 ///
@@ -89,6 +83,8 @@ namespace detail
 /// In this example a device-level select operation is performed on an array of
 /// integer values with array of <tt>char</tt>s used as flags.
 ///
+/// The full example is [on GitHub](https://github.com/ROCm/rocm-libraries/tree/develop/projects/rocprim/example/rocprim/device/example_device_select.cpp).
+///
 /// \code{.cpp}
 /// #include <rocprim/rocprim.hpp>
 ///
@@ -123,30 +119,27 @@ namespace detail
 /// // output_count: 4
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class FlagIterator,
-    class OutputIterator,
-    class SelectedCountOutputIterator,
-    bool UsingOrderedBlockId = false
->
-inline
-hipError_t select(void * temporary_storage,
-                  size_t& storage_size,
-                  InputIterator input,
-                  FlagIterator flags,
-                  OutputIterator output,
-                  SelectedCountOutputIterator selected_count_output,
-                  const size_t size,
-                  const hipStream_t stream = 0,
-                  const bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class FlagIterator,
+         class OutputIterator,
+         class SelectedCountOutputIterator,
+         bool UsingOrderedBlockId = false>
+inline hipError_t select(void*                       temporary_storage,
+                         size_t&                     storage_size,
+                         InputIterator               input,
+                         FlagIterator                flags,
+                         OutputIterator              output,
+                         SelectedCountOutputIterator selected_count_output,
+                         const size_t                size,
+                         const hipStream_t           stream            = 0,
+                         const bool                  debug_synchronous = false)
 {
     // Dummy unary predicate
     using unary_predicate_type = ::rocprim::empty_type;
     // Dummy inequality operation
-    using inequality_op_type = ::rocprim::empty_type;
-    using offset_type = unsigned int;
+    using inequality_op_type             = ::rocprim::empty_type;
+    using offset_type                    = size_t;
     rocprim::empty_type* const no_values = nullptr; // key only
 
     using output_key_iterator_tuple = tuple<OutputIterator, ::rocprim::empty_type>;
@@ -156,21 +149,21 @@ hipError_t select(void * temporary_storage,
     const output_value_iterator_tuple no_output_values{nullptr, nullptr}; // key only
 
     return detail::partition_impl<detail::partition_subalgo::select_flag,
-                                 UsingOrderedBlockId,
-                                 Config,
-                                 offset_type>(temporary_storage,
-                                              storage_size,
-                                              input,
-                                              no_values,
-                                              flags,
-                                              output_tuple,
-                                              no_output_values,
-                                              selected_count_output,
-                                              size,
-                                              inequality_op_type(),
-                                              stream,
-                                              debug_synchronous,
-                                              unary_predicate_type());
+                                  UsingOrderedBlockId,
+                                  Config,
+                                  offset_type>(temporary_storage,
+                                               storage_size,
+                                               input,
+                                               no_values,
+                                               flags,
+                                               output_tuple,
+                                               no_output_values,
+                                               selected_count_output,
+                                               size,
+                                               inequality_op_type(),
+                                               stream,
+                                               debug_synchronous,
+                                               unary_predicate_type());
 }
 
 /// \brief Parallel select primitive for device level using selection operator.
@@ -228,7 +221,7 @@ hipError_t select(void * temporary_storage,
 /// #include <rocprim/rocprim.hpp>
 ///
 /// auto predicate =
-///     [] __device__ (int a) -> bool
+///     [](int a) -> bool
 ///     {
 ///         return (a % 2) == 0;
 ///     };
@@ -261,30 +254,28 @@ hipError_t select(void * temporary_storage,
 /// // output_count: 4
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class OutputIterator,
-    class SelectedCountOutputIterator,
-    class UnaryPredicate,
-    bool UsingOrderedBlockId = false>
-inline
-hipError_t select(void * temporary_storage,
-                  size_t& storage_size,
-                  InputIterator input,
-                  OutputIterator output,
-                  SelectedCountOutputIterator selected_count_output,
-                  const size_t size,
-                  UnaryPredicate predicate,
-                  const hipStream_t stream = 0,
-                  const bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class OutputIterator,
+         class SelectedCountOutputIterator,
+         class UnaryPredicate,
+         bool UsingOrderedBlockId = false>
+inline hipError_t select(void*                       temporary_storage,
+                         size_t&                     storage_size,
+                         InputIterator               input,
+                         OutputIterator              output,
+                         SelectedCountOutputIterator selected_count_output,
+                         const size_t                size,
+                         UnaryPredicate              predicate,
+                         const hipStream_t           stream            = 0,
+                         const bool                  debug_synchronous = false)
 {
     // Dummy flag type
-    using flag_type = ::rocprim::empty_type;
-    using offset_type = unsigned int;
-    flag_type * flags = nullptr;
+    using flag_type   = ::rocprim::empty_type;
+    using offset_type = size_t;
+    flag_type* flags  = nullptr;
     // Dummy inequality operation
-    using inequality_op_type = ::rocprim::empty_type;
+    using inequality_op_type             = ::rocprim::empty_type;
     rocprim::empty_type* const no_values = nullptr; // key only
 
     using output_key_iterator_tuple = tuple<OutputIterator, ::rocprim::empty_type>;
@@ -371,7 +362,7 @@ hipError_t select(void * temporary_storage,
 /// #include <rocprim/rocprim.hpp>
 ///
 /// auto predicate =
-///     [] __device__ (int a) -> bool
+///     [](int a) -> bool
 ///     {
 ///         return (a % 2) == 0;
 ///     };
@@ -411,7 +402,7 @@ template<class Config = default_config,
          class OutputIterator,
          class SelectedCountOutputIterator,
          class UnaryPredicate,
-         bool  UsingOrderedBlockId = false>
+         bool UsingOrderedBlockId = false>
 inline hipError_t select(void*                       temporary_storage,
                          size_t&                     storage_size,
                          InputIterator               input,
@@ -425,7 +416,7 @@ inline hipError_t select(void*                       temporary_storage,
 {
     // Dummy inequality operation
     using inequality_op_type             = ::rocprim::empty_type;
-    using offset_type                    = unsigned int;
+    using offset_type                    = size_t;
     rocprim::empty_type* const no_values = nullptr; // key only
 
     using output_key_iterator_tuple = tuple<OutputIterator, ::rocprim::empty_type>;
@@ -530,34 +521,33 @@ inline hipError_t select(void*                       temporary_storage,
 /// // output_count: 5
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class OutputIterator,
-    class UniqueCountOutputIterator,
-    class EqualityOp = ::rocprim::equal_to<typename std::iterator_traits<InputIterator>::value_type>,
-    bool  UsingOrderedBlockId = false>
-inline
-hipError_t unique(void * temporary_storage,
-                  size_t& storage_size,
-                  InputIterator input,
-                  OutputIterator output,
-                  UniqueCountOutputIterator unique_count_output,
-                  const size_t size,
-                  EqualityOp equality_op = EqualityOp(),
-                  const hipStream_t stream = 0,
-                  const bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class OutputIterator,
+         class UniqueCountOutputIterator,
+         class EqualityOp
+         = ::rocprim::equal_to<typename std::iterator_traits<InputIterator>::value_type>,
+         bool UsingOrderedBlockId = false>
+inline hipError_t unique(void*                     temporary_storage,
+                         size_t&                   storage_size,
+                         InputIterator             input,
+                         OutputIterator            output,
+                         UniqueCountOutputIterator unique_count_output,
+                         const size_t              size,
+                         EqualityOp                equality_op       = EqualityOp(),
+                         const hipStream_t         stream            = 0,
+                         const bool                debug_synchronous = false)
 {
     // Dummy unary predicate
     using unary_predicate_type = ::rocprim::empty_type;
-    using offset_type = unsigned int;
+    using offset_type          = unsigned int;
     // Dummy flag type
-    using flag_type = ::rocprim::empty_type;
-    const flag_type * flags = nullptr;
+    using flag_type                      = ::rocprim::empty_type;
+    const flag_type*           flags     = nullptr;
     rocprim::empty_type* const no_values = nullptr; // key only
 
     // Convert equality operator to inequality operator
-    auto inequality_op = detail::inequality_wrapper<EqualityOp>(equality_op);
+    auto inequality_op = inequality_wrapper<EqualityOp>(equality_op);
 
     using output_key_iterator_tuple = tuple<OutputIterator, ::rocprim::empty_type>;
     output_key_iterator_tuple output_tuple{output, ::rocprim::empty_type()};
@@ -566,21 +556,21 @@ hipError_t unique(void * temporary_storage,
     const output_value_iterator_tuple no_output_values{nullptr, nullptr}; // key only
 
     return detail::partition_impl<detail::partition_subalgo::select_unique,
-                                 UsingOrderedBlockId,
-                                 Config,
-                                 offset_type>(temporary_storage,
-                                              storage_size,
-                                              input,
-                                              no_values,
-                                              flags,
-                                              output_tuple,
-                                              no_output_values,
-                                              unique_count_output,
-                                              size,
-                                              inequality_op,
-                                              stream,
-                                              debug_synchronous,
-                                              unary_predicate_type());
+                                  UsingOrderedBlockId,
+                                  Config,
+                                  offset_type>(temporary_storage,
+                                               storage_size,
+                                               input,
+                                               no_values,
+                                               flags,
+                                               output_tuple,
+                                               no_output_values,
+                                               unique_count_output,
+                                               size,
+                                               inequality_op,
+                                               stream,
+                                               debug_synchronous,
+                                               unary_predicate_type());
 }
 
 /// \brief Device-level parallel unique by key primitive.
@@ -632,15 +622,15 @@ hipError_t unique(void * temporary_storage,
 /// \param [in] stream [optional] HIP stream object. The default is \p 0 (default stream).
 /// \param [in] debug_synchronous [optional] If true, synchronization after every kernel
 /// launch is forced in order to check for errors. The default value is \p false.
-template <typename Config = default_config,
-          typename KeyIterator,
-          typename ValueIterator,
-          typename OutputKeyIterator,
-          typename OutputValueIterator,
-          typename UniqueCountOutputIterator,
-          typename EqualityOp
-          = ::rocprim::equal_to<typename std::iterator_traits<KeyIterator>::value_type>,
-          bool     UsingOrderedBlockId = false>
+template<typename Config = default_config,
+         typename KeyIterator,
+         typename ValueIterator,
+         typename OutputKeyIterator,
+         typename OutputValueIterator,
+         typename UniqueCountOutputIterator,
+         typename EqualityOp
+         = ::rocprim::equal_to<typename std::iterator_traits<KeyIterator>::value_type>,
+         bool UsingOrderedBlockId = false>
 inline hipError_t unique_by_key(void*                           temporary_storage,
                                 size_t&                         storage_size,
                                 const KeyIterator               keys_input,
@@ -660,7 +650,7 @@ inline hipError_t unique_by_key(void*                           temporary_storag
     const auto no_predicate = ::rocprim::empty_type{};
 
     // Convert equality operator to inequality operator
-    const auto inequality_op = detail::inequality_wrapper<EqualityOp>(equality_op);
+    const auto inequality_op = inequality_wrapper<EqualityOp>(equality_op);
 
     using output_key_iterator_tuple = tuple<OutputKeyIterator, ::rocprim::empty_type>;
     output_key_iterator_tuple output_key_tuple{keys_output, ::rocprim::empty_type()};
@@ -686,9 +676,9 @@ inline hipError_t unique_by_key(void*                           temporary_storag
                                                no_predicate);
 }
 
+END_ROCPRIM_NAMESPACE
+
 /// @}
 // end of group devicemodule
-
-END_ROCPRIM_NAMESPACE
 
 #endif // ROCPRIM_DEVICE_DEVICE_SELECT_HPP_

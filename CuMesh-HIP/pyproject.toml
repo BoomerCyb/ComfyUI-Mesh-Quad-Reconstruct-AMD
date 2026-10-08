@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cumesh"
-version = "1.0.1+hip"
+version = "1.0.2+hip"
 description = "Native Windows HIP mesh utilities"
 requires-python = ">=3.12"
 readme = "README.md"

@@ -1,7 +1,6 @@
 /******************************************************************************
- * Copyright (c) 2010-2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
- * Modifications Copyright (c) 2021-2025, Advanced Micro Devices, Inc.  All rights reserved.
+ * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) 2025, Advanced Micro Devices, Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -27,14 +26,15 @@
  *
  ******************************************************************************/
 
-#ifndef HIPCUB_TEX_REF_INPUT_ITERATOR_HPP_
-#define HIPCUB_TEX_REF_INPUT_ITERATOR_HPP_
+#ifndef HIPCUB_DEVICE_DEVICE_TRANSFORM_HPP_
+#define HIPCUB_DEVICE_DEVICE_TRANSFORM_HPP_
+
+#include <hip/hip_common.h>
 
 #ifdef __HIP_PLATFORM_AMD__
-    #include "../backend/rocprim/iterator/tex_ref_input_iterator.hpp" // IWYU pragma: export
+    #include "../backend/rocprim/device/device_transform.hpp" // IWYU pragma: export
 #elif defined(__HIP_PLATFORM_NVIDIA__)
-    #include "../backend/cub/iterator/tex_ref_input_iterator.hpp" // IWYU pragma: export
-    #include "../config.hpp"
+    #include "../backend/cub/device/device_transform.hpp" // IWYU pragma: export
 #endif
 
-#endif // HIPCUB_ITERATOR_DISCARD_OUTPUT__HPP_
+#endif // HIPCUB_DEVICE_DEVICE_TRANSFORM_HPP_

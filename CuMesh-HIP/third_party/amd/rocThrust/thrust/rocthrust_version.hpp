@@ -28,10 +28,10 @@
 ///
 /// For example, if ROCTHRUST_VERSION is 100500, then the major version is 1,
 /// the minor version is 5, and the patch level is 0.
-#define ROCTHRUST_VERSION 400000
+#define ROCTHRUST_VERSION 400700
 
 #define ROCTHRUST_VERSION_MAJOR 4
-#define ROCTHRUST_VERSION_MINOR 0
+#define ROCTHRUST_VERSION_MINOR 7
 #define ROCTHRUST_VERSION_PATCH 0
 
 #endif // ROCTHRUST_VERSION_HPP_

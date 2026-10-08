@@ -22,7 +22,7 @@
 #define HIPCUB_VERSION_HPP_
 
 /// \def HIPCUB_VERSION
-/// \brief hipCUB library version
+/// \brief The hipCUB library version.
 ///
 /// Version number may not be visible in the documentation.
 ///
@@ -32,10 +32,27 @@
 ///
 /// For example, if HIPCUB_VERSION is 100500, then the major version is 1,
 /// the minor version is 5, and the patch level is 0.
-#define HIPCUB_VERSION 400000
+#define HIPCUB_VERSION 400700
 
 #define HIPCUB_VERSION_MAJOR 4
-#define HIPCUB_VERSION_MINOR 0
+#define HIPCUB_VERSION_MINOR 7
 #define HIPCUB_VERSION_PATCH 0
+
+/// \def HIPCUB_CCCL_VERSION
+/// \brief The CCCL version hipCUB is compatible with.
+///
+/// Version number may not be visible in the documentation.
+///
+/// HIPCUB_CCCL_VERSION % 100 is the patch level,
+/// HIPCUB_CCCL_VERSION / 100 % 1000 is the minor version,
+/// HIPCUB_CCCL_VERSION / 100000 is the major version.
+///
+/// For example, if HIPCUB_CCCL_VERSION is 300003, then this library
+/// is compatible with CCCL 3.0.3.
+#define HIPCUB_CCCL_VERSION 200802
+
+#define HIPCUB_CCCL_VERSION_MAJOR 2
+#define HIPCUB_CCCL_VERSION_MINOR 8
+#define HIPCUB_CCCL_VERSION_PATCH 2
 
 #endif // HIPCUB_VERSION_HPP_

@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2017-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -25,24 +25,26 @@
 #include <iterator>
 #include <type_traits>
 
-#include "../config.hpp"
 #include "../common.hpp"
+#include "../config.hpp"
 #include "../detail/various.hpp"
 
-#include "../iterator/zip_iterator.hpp"
+#include "../iterator/counting_iterator.hpp"
 #include "../iterator/discard_iterator.hpp"
 #include "../iterator/transform_iterator.hpp"
-#include "../iterator/counting_iterator.hpp"
+#include "../iterator/zip_iterator.hpp"
 #include "../types/tuple.hpp"
 
 #include "detail/config/device_scan.hpp"
 #include "detail/device_segmented_scan.hpp"
 #include "device_scan.hpp"
 
-BEGIN_ROCPRIM_NAMESPACE
-
 /// \addtogroup devicemodule
 /// @{
+
+BEGIN_ROCPRIM_NAMESPACE
+
+#ifndef DOXYGEN_SHOULD_SKIP_THIS // Do not document
 
 namespace detail
 {
@@ -74,60 +76,31 @@ struct transform_op_t
 
 template<bool Exclusive,
          class Config,
-         class ResultType,
          class InputIterator,
          class OutputIterator,
          class OffsetIterator,
          class InitValueType,
          class BinaryFunction>
-ROCPRIM_KERNEL ROCPRIM_LAUNCH_BOUNDS(ROCPRIM_DEFAULT_MAX_BLOCK_SIZE) void
-    segmented_scan_kernel(InputIterator  input,
-                          OutputIterator output,
-                          OffsetIterator begin_offsets,
-                          OffsetIterator end_offsets,
-                          InitValueType  initial_value,
-                          BinaryFunction scan_op)
+inline hipError_t segmented_scan_impl(void*               temporary_storage,
+                                      size_t&             storage_size,
+                                      InputIterator       input,
+                                      OutputIterator      output,
+                                      unsigned int        segments,
+                                      OffsetIterator      begin_offsets,
+                                      OffsetIterator      end_offsets,
+                                      const InitValueType initial_value,
+                                      BinaryFunction      scan_op,
+                                      hipStream_t         stream,
+                                      bool                debug_synchronous)
 {
-    segmented_scan<Exclusive, Config, ResultType>(
-        input, output, begin_offsets, end_offsets,
-        static_cast<ResultType>(initial_value), scan_op
-    );
-}
-
-template<
-    bool Exclusive,
-    class Config,
-    class InputIterator,
-    class OutputIterator,
-    class OffsetIterator,
-    class InitValueType,
-    class BinaryFunction
->
-inline
-hipError_t segmented_scan_impl(void * temporary_storage,
-                               size_t& storage_size,
-                               InputIterator input,
-                               OutputIterator output,
-                               unsigned int segments,
-                               OffsetIterator begin_offsets,
-                               OffsetIterator end_offsets,
-                               const InitValueType initial_value,
-                               BinaryFunction scan_op,
-                               hipStream_t stream,
-                               bool debug_synchronous)
-{
-    using input_type = typename std::iterator_traits<InputIterator>::value_type;
+    using input_type  = typename std::iterator_traits<InputIterator>::value_type;
     using result_type = typename std::conditional<Exclusive, InitValueType, input_type>::type;
 
-    using config = wrapped_scan_config<Config, input_type>;
+    using Selector = detail::scan_config_selector<input_type>;
 
-    detail::target_arch target_arch;
-    hipError_t          result = host_target_arch(stream, target_arch);
-    if(result != hipSuccess)
-    {
-        return result;
-    }
-    const scan_config_params params = dispatch_target_arch<config>(target_arch);
+    const target current_target(stream);
+
+    const auto params = get_config<Selector>(Config{}, current_target);
 
     const unsigned int block_size = params.kernel_config.block_size;
 
@@ -139,25 +112,38 @@ hipError_t segmented_scan_impl(void * temporary_storage,
         return hipSuccess;
     }
 
-    if( segments == 0u )
+    if(segments == 0u)
         return hipSuccess;
 
     std::chrono::steady_clock::time_point start;
-    if(debug_synchronous) start = std::chrono::steady_clock::now();
-    hipLaunchKernelGGL(
-        HIP_KERNEL_NAME(segmented_scan_kernel<Exclusive, config, result_type>),
-        dim3(segments), dim3(block_size), 0, stream,
-        input, output,
-        begin_offsets, end_offsets,
-        initial_value, scan_op
-    );
+    if(debug_synchronous)
+    {
+        start = std::chrono::steady_clock::now();
+    }
+    auto segmented_scan_kernel = [=](auto target_config)
+    {
+        segmented_scan<decltype(target_config), Exclusive, result_type>(
+            input,
+            output,
+            begin_offsets,
+            end_offsets,
+            static_cast<result_type>(initial_value),
+            scan_op);
+    };
+
+    ROCPRIM_RETURN_ON_ERROR(execute_launch_plan<Config, Selector>(current_target,
+                                                                  segmented_scan_kernel,
+                                                                  dim3(segments),
+                                                                  dim3(block_size),
+                                                                  0,
+                                                                  stream));
     ROCPRIM_DETAIL_HIP_SYNC_AND_RETURN_ON_ERROR("segmented_scan", segments, start);
     return hipSuccess;
 }
 
+} // namespace detail
 
-
-} // end of detail namespace
+#endif // DOXYGEN_SHOULD_SKIP_THIS
 
 /// \brief Parallel segmented inclusive scan primitive for device level.
 ///
@@ -209,12 +195,14 @@ hipError_t segmented_scan_impl(void * temporary_storage,
 /// In this example a device-level segmented inclusive min-scan operation is performed on
 /// an array of integer values (<tt>short</tt>s are scanned into <tt>int</tt>s) using custom operator.
 ///
+/// The full example is [on GitHub](https://github.com/ROCm/rocm-libraries/tree/develop/projects/rocprim/example/rocprim/device/example_device_segmented_scan.cpp).
+///
 /// \code{.cpp}
 /// #include <rocprim/rocprim.hpp>
 ///
 /// // custom scan function
 /// auto min_op =
-///     [] __device__ (int a, int b) -> int
+///     [] (int a, int b) -> int
 ///     {
 ///         return a < b ? a : b;
 ///     };
@@ -237,40 +225,44 @@ hipError_t segmented_scan_impl(void * temporary_storage,
 /// hipMalloc(&temporary_storage_ptr, temporary_storage_size_bytes);
 ///
 /// // perform scan
-/// rocprim::inclusive_scan(
+/// rocprim::segmented_inclusive_scan(
 ///     temporary_storage_ptr, temporary_storage_size_bytes,
 ///     input, output, segments, offsets, offsets + 1, min_op
 /// );
 /// // output: [4, 4, 6, 2, 5, 1, 1, 1]
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class OutputIterator,
-    class OffsetIterator,
-    class BinaryFunction = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>
->
-inline
-hipError_t segmented_inclusive_scan(void * temporary_storage,
-                                    size_t& storage_size,
-                                    InputIterator input,
-                                    OutputIterator output,
-                                    unsigned int segments,
-                                    OffsetIterator begin_offsets,
-                                    OffsetIterator end_offsets,
-                                    BinaryFunction scan_op = BinaryFunction(),
-                                    hipStream_t stream = 0,
-                                    bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class OutputIterator,
+         class OffsetIterator,
+         class BinaryFunction
+         = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>>
+inline hipError_t segmented_inclusive_scan(void*          temporary_storage,
+                                           size_t&        storage_size,
+                                           InputIterator  input,
+                                           OutputIterator output,
+                                           unsigned int   segments,
+                                           OffsetIterator begin_offsets,
+                                           OffsetIterator end_offsets,
+                                           BinaryFunction scan_op           = BinaryFunction(),
+                                           hipStream_t    stream            = 0,
+                                           bool           debug_synchronous = false)
 {
-    using input_type = typename std::iterator_traits<InputIterator>::value_type;
+    using input_type  = typename std::iterator_traits<InputIterator>::value_type;
     using result_type = input_type;
 
-    return detail::segmented_scan_impl<false, Config>(
-        temporary_storage, storage_size,
-        input, output, segments, begin_offsets, end_offsets, result_type(),
-        scan_op, stream, debug_synchronous
-    );
+    return detail::segmented_scan_impl<false, Config>(temporary_storage,
+                                                      storage_size,
+                                                      input,
+                                                      output,
+                                                      segments,
+                                                      begin_offsets,
+                                                      end_offsets,
+                                                      result_type(),
+                                                      scan_op,
+                                                      stream,
+                                                      debug_synchronous);
 }
 
 /// \brief Parallel segmented exclusive scan primitive for device level.
@@ -330,7 +322,7 @@ hipError_t segmented_inclusive_scan(void * temporary_storage,
 ///
 /// // custom scan function
 /// auto min_op =
-///     [] __device__ (int a, int b) -> int
+///     [] (int a, int b) -> int
 ///     {
 ///         return a < b ? a : b;
 ///     };
@@ -363,32 +355,36 @@ hipError_t segmented_inclusive_scan(void * temporary_storage,
 /// // output: [9, 4, 9, 6, 9, 5, 1, 1]
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class OutputIterator,
-    class OffsetIterator,
-    class InitValueType,
-    class BinaryFunction = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>
->
-inline
-hipError_t segmented_exclusive_scan(void * temporary_storage,
-                                    size_t& storage_size,
-                                    InputIterator input,
-                                    OutputIterator output,
-                                    unsigned int segments,
-                                    OffsetIterator begin_offsets,
-                                    OffsetIterator end_offsets,
-                                    const InitValueType initial_value,
-                                    BinaryFunction scan_op = BinaryFunction(),
-                                    hipStream_t stream = 0,
-                                    bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class OutputIterator,
+         class OffsetIterator,
+         class InitValueType,
+         class BinaryFunction
+         = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>>
+inline hipError_t segmented_exclusive_scan(void*               temporary_storage,
+                                           size_t&             storage_size,
+                                           InputIterator       input,
+                                           OutputIterator      output,
+                                           unsigned int        segments,
+                                           OffsetIterator      begin_offsets,
+                                           OffsetIterator      end_offsets,
+                                           const InitValueType initial_value,
+                                           BinaryFunction      scan_op           = BinaryFunction(),
+                                           hipStream_t         stream            = 0,
+                                           bool                debug_synchronous = false)
 {
-    return detail::segmented_scan_impl<true, Config>(
-        temporary_storage, storage_size,
-        input, output, segments, begin_offsets, end_offsets, initial_value,
-        scan_op, stream, debug_synchronous
-    );
+    return detail::segmented_scan_impl<true, Config>(temporary_storage,
+                                                     storage_size,
+                                                     input,
+                                                     output,
+                                                     segments,
+                                                     begin_offsets,
+                                                     end_offsets,
+                                                     initial_value,
+                                                     scan_op,
+                                                     stream,
+                                                     debug_synchronous);
 }
 
 /// \brief Parallel segmented inclusive scan primitive for device level.
@@ -468,39 +464,37 @@ hipError_t segmented_exclusive_scan(void * temporary_storage,
 /// // output: [1, 3, 6, 4, 9, 6, 13, 21]
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class OutputIterator,
-    class HeadFlagIterator,
-    class BinaryFunction = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>
->
-inline
-hipError_t segmented_inclusive_scan(void * temporary_storage,
-                                    size_t& storage_size,
-                                    InputIterator input,
-                                    OutputIterator output,
-                                    HeadFlagIterator head_flags,
-                                    size_t size,
-                                    BinaryFunction scan_op = BinaryFunction(),
-                                    hipStream_t stream = 0,
-                                    bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class OutputIterator,
+         class HeadFlagIterator,
+         class BinaryFunction
+         = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>>
+inline hipError_t segmented_inclusive_scan(void*            temporary_storage,
+                                           size_t&          storage_size,
+                                           InputIterator    input,
+                                           OutputIterator   output,
+                                           HeadFlagIterator head_flags,
+                                           size_t           size,
+                                           BinaryFunction   scan_op           = BinaryFunction(),
+                                           hipStream_t      stream            = 0,
+                                           bool             debug_synchronous = false)
 {
-    using input_type = typename std::iterator_traits<InputIterator>::value_type;
+    using input_type  = typename std::iterator_traits<InputIterator>::value_type;
     using result_type = input_type;
-    using flag_type = typename std::iterator_traits<HeadFlagIterator>::value_type;
-    using headflag_scan_op_wrapper_type =
-        detail::headflag_scan_op_wrapper<
-            result_type, flag_type, BinaryFunction
-        >;
+    using flag_type   = typename std::iterator_traits<HeadFlagIterator>::value_type;
+    using headflag_scan_op_wrapper_type
+        = detail::headflag_scan_op_wrapper<result_type, flag_type, BinaryFunction>;
 
     return inclusive_scan<Config>(
-        temporary_storage, storage_size,
+        temporary_storage,
+        storage_size,
         rocprim::make_zip_iterator(rocprim::make_tuple(input, head_flags)),
         rocprim::make_zip_iterator(rocprim::make_tuple(output, rocprim::make_discard_iterator())),
-        size, headflag_scan_op_wrapper_type(scan_op),
-        stream, debug_synchronous
-    );
+        size,
+        headflag_scan_op_wrapper_type(scan_op),
+        stream,
+        debug_synchronous);
 }
 
 /// \brief Parallel segmented exclusive scan primitive for device level.
@@ -583,32 +577,28 @@ hipError_t segmented_inclusive_scan(void * temporary_storage,
 /// // output: [9, 10, 12, 9, 13, 9, 15, 22]
 /// \endcode
 /// \endparblock
-template<
-    class Config = default_config,
-    class InputIterator,
-    class OutputIterator,
-    class InitValueType,
-    class HeadFlagIterator,
-    class BinaryFunction = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>
->
-inline
-hipError_t segmented_exclusive_scan(void * temporary_storage,
-                                    size_t& storage_size,
-                                    InputIterator input,
-                                    OutputIterator output,
-                                    HeadFlagIterator head_flags,
-                                    const InitValueType initial_value,
-                                    size_t size,
-                                    BinaryFunction scan_op = BinaryFunction(),
-                                    hipStream_t stream = 0,
-                                    bool debug_synchronous = false)
+template<class Config = default_config,
+         class InputIterator,
+         class OutputIterator,
+         class InitValueType,
+         class HeadFlagIterator,
+         class BinaryFunction
+         = ::rocprim::plus<typename std::iterator_traits<InputIterator>::value_type>>
+inline hipError_t segmented_exclusive_scan(void*               temporary_storage,
+                                           size_t&             storage_size,
+                                           InputIterator       input,
+                                           OutputIterator      output,
+                                           HeadFlagIterator    head_flags,
+                                           const InitValueType initial_value,
+                                           size_t              size,
+                                           BinaryFunction      scan_op           = BinaryFunction(),
+                                           hipStream_t         stream            = 0,
+                                           bool                debug_synchronous = false)
 {
     using result_type = InitValueType;
-    using flag_type = typename std::iterator_traits<HeadFlagIterator>::value_type;
-    using headflag_scan_op_wrapper_type =
-        detail::headflag_scan_op_wrapper<
-            result_type, flag_type, BinaryFunction
-        >;
+    using flag_type   = typename std::iterator_traits<HeadFlagIterator>::value_type;
+    using headflag_scan_op_wrapper_type
+        = detail::headflag_scan_op_wrapper<result_type, flag_type, BinaryFunction>;
     using transform_op
         = detail::transform_op_t<InputIterator, HeadFlagIterator, result_type, flag_type>;
 
@@ -631,9 +621,9 @@ hipError_t segmented_exclusive_scan(void * temporary_storage,
         debug_synchronous);
 }
 
+END_ROCPRIM_NAMESPACE
+
 /// @}
 // end of group devicemodule
-
-END_ROCPRIM_NAMESPACE
 
 #endif // ROCPRIM_DEVICE_DEVICE_SEGMENTED_SCAN_HPP_
