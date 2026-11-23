@@ -657,6 +657,12 @@ static __global__ void construct_vertex_adj_pairs_kernel(
     if (tid >= M) return;
 
     const int2 adj_faces = manifold_face_adj[tid];
+    if (adj_faces.x < 0 || adj_faces.y < 0 || adj_faces.x == adj_faces.y) {
+        int safe_f = adj_faces.x >= 0 ? adj_faces.x : 0;
+        vertex_adj_pairs[2 * tid + 0] = make_int2(3 * safe_f, 3 * safe_f);
+        vertex_adj_pairs[2 * tid + 1] = make_int2(3 * safe_f, 3 * safe_f);
+        return;
+    }
     const int3 face1 = faces[adj_faces.x];
     const int3 face2 = faces[adj_faces.y];
 
@@ -1064,13 +1070,17 @@ static __global__ void get_flip_flags_kernel(
     if (tid >= M) return;
 
     const int2 adj_faces = manifold_face_adj[tid];
+    if (adj_faces.x < 0 || adj_faces.y < 0 || adj_faces.x == adj_faces.y) {
+        flipped[tid] = 0;
+        return;
+    }
     const int3 face1 = faces[adj_faces.x];
     const int3 face2 = faces[adj_faces.y];
 
     const int v1[3] = {face1.x, face1.y, face1.z};
 
-    int shared_local_indices1[2];
-    int shared_local_indices2[2];
+    int shared_local_indices1[2] = {0, 0};
+    int shared_local_indices2[2] = {0, 0};
     int found_count = 0;
 
     for (int i = 0; i < 3; ++i) {
@@ -1090,6 +1100,11 @@ static __global__ void get_flip_flags_kernel(
         if (found_count == 2) {
             break;
         }
+    }
+
+    if (found_count < 2) {
+        flipped[tid] = 0;
+        return;
     }
 
     int direction1 = (shared_local_indices1[1] - shared_local_indices1[0] + 3) % 3;

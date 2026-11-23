@@ -26,8 +26,8 @@ static __global__ void get_neighbor_face_cnt_kernel(
     int3 f = faces[tid];
 
     atomicAdd(&neighbor_face_cnt[f.x], 1);
-    atomicAdd(&neighbor_face_cnt[f.y], 1);
-    atomicAdd(&neighbor_face_cnt[f.z], 1);
+    if (f.y != f.x) atomicAdd(&neighbor_face_cnt[f.y], 1);
+    if (f.z != f.x && f.z != f.y) atomicAdd(&neighbor_face_cnt[f.z], 1);
 }
 
 
@@ -53,8 +53,8 @@ static __global__ void fill_neighbor_face_ids_kernel(
     int3 f = faces[tid];
 
     neighbor_face_ids[neighbor_face_ids_offset[f.x] + atomicAdd(&neighbor_face_cnt[f.x], 1)] = tid;
-    neighbor_face_ids[neighbor_face_ids_offset[f.y] + atomicAdd(&neighbor_face_cnt[f.y], 1)] = tid;
-    neighbor_face_ids[neighbor_face_ids_offset[f.z] + atomicAdd(&neighbor_face_cnt[f.z], 1)] = tid;
+    if (f.y != f.x) neighbor_face_ids[neighbor_face_ids_offset[f.y] + atomicAdd(&neighbor_face_cnt[f.y], 1)] = tid;
+    if (f.z != f.x && f.z != f.y) neighbor_face_ids[neighbor_face_ids_offset[f.z] + atomicAdd(&neighbor_face_cnt[f.z], 1)] = tid;
 }
 
 
@@ -196,15 +196,21 @@ static __global__ void get_edge_face_adjacency_kernel(
     int e0 = int(e >> 32);
     int e1 = int(e & 0xFFFFFFFF);
 
-    // assign connectivity
+    // assign connectivity (bounds-checked & degenerate self-edge safe)
     int ptr = edge2face_offset[tid];
+    int ptr_end = edge2face_offset[tid + 1];
     for (int f = vert2face_offset[e0]; f < vert2face_offset[e0+1]; f++) {
         int fid = vert2face[f];
         int3 f_vids = faces[fid];
-        if (f_vids.x == e1 || f_vids.y == e1 || f_vids.z == e1) {
+        bool has_edge = (e0 == e1)
+            ? ((f_vids.x == e0 && f_vids.y == e0) || (f_vids.y == e0 && f_vids.z == e0) || (f_vids.z == e0 && f_vids.x == e0))
+            : (f_vids.x == e1 || f_vids.y == e1 || f_vids.z == e1);
+        if (has_edge) {
             // this face contains the edge
-            edge2face[ptr] = fid;
-            ptr++;
+            if (ptr < ptr_end) {
+                edge2face[ptr] = fid;
+                ptr++;
+            }
             // fill face2edge
             if (f_vids.x == e0 && f_vids.y == e1 || f_vids.x == e1 && f_vids.y == e0) {
                 face2edge[fid].x = tid;
@@ -243,10 +249,13 @@ void CuMesh::get_edge_face_adjacency() {
         E + 1
     ));
 
-    // allocate memory for edge2face
+    // allocate memory for edge2face (init to -1 sentinel for degenerate single-face double-edges)
     int total_edge_face_cnt;
     CUDA_CHECK(hipMemcpy(&total_edge_face_cnt, &this->edge2face_offset.ptr[E], sizeof(int), hipMemcpyDeviceToHost));
     this->edge2face.resize(total_edge_face_cnt);
+    if (total_edge_face_cnt > 0) {
+        CUDA_CHECK(hipMemset(this->edge2face.ptr, 0xFF, total_edge_face_cnt * sizeof(int)));
+    }
 
     // allocate memory for face2edge
     this->face2edge.resize(F);
@@ -644,9 +653,16 @@ static __global__ void set_manifold_face_adj_kernel(
     // get adjacent faces
     int start = edge2face_offset[edge_idx];
     int end = edge2face_offset[edge_idx+1];
-    if (end - start != 2) return;   // if not a manifold edge
+    if (end - start != 2) {
+        manifold_face_adj[tid] = {0, 0};
+        return;
+    }
     int f0 = edge2face[start];
     int f1 = edge2face[start + 1];
+    if (f0 < 0 || f1 < 0 || f0 == f1) {
+        manifold_face_adj[tid] = {0, 0};
+        return;
+    }
 
     manifold_face_adj[tid] = {f0, f1};
 }
